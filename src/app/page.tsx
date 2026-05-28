@@ -92,46 +92,52 @@ export default function JugalbandiApp() {
     .eq("receiver_id", userId)
     .eq("is_delivered", false);
 
-    if (!data) return;
+  const { data } = await supabase
+    .from("messages")
+    .select("*, sender:profiles!messages_sender_id_fkey(id,full_name,username), receiver:profiles!messages_receiver_id_fkey(id,full_name,username)")
+    .or(`sender_id.eq.${userId},receiver_id.eq.${userId}`)
+    .order("created_at", { ascending: false });
 
-    const seen = new Set<string>();
-    const convs: Conversation[] = [];
+  if (!data) return;
 
+  const seen = new Set<string>();
+  const convs: Conversation[] = [];
+
+  convs.push({
+    id: "saved",
+    name: "Saved Messages",
+    username: "saved",
+    avatar: "★",
+    color: "#1a6fff",
+    lastMsg: "Your personal notes",
+    time: "",
+    unread: 0,
+    online: true,
+    saved: true,
+  });
+
+  for (const msg of data) {
+    const other = msg.sender_id === userId ? msg.receiver : msg.sender;
+    if (!other || other.id === userId || seen.has(other.id)) continue;
+    seen.add(other.id);
+    const unread = data.filter(m =>
+      m.sender_id === other.id && m.receiver_id === userId && !m.is_read
+    ).length;
     convs.push({
-      id: "saved",
-      name: "Saved Messages",
-      username: "saved",
-      avatar: "★",
-      color: "#1a6fff",
-      lastMsg: "Your personal notes",
-      time: "",
-      unread: 0,
-      online: true,
-      saved: true,
+      id: other.id,
+      name: other.full_name,
+      username: other.username,
+      avatar: getInitials(other.full_name),
+      color: getColor(other.id),
+      lastMsg: msg.content,
+      time: timeAgo(msg.created_at),
+      unread,
+      online: false,
+      userId: other.id,
     });
-
-    for (const msg of data) {
-      const other = msg.sender_id === userId ? msg.receiver : msg.sender;
-      if (!other || other.id === userId || seen.has(other.id)) continue;
-      seen.add(other.id);
-      const unread = data.filter(m =>
-        m.sender_id === other.id && m.receiver_id === userId && !m.is_read
-      ).length;
-      convs.push({
-        id: other.id,
-        name: other.full_name,
-        username: other.username,
-        avatar: getInitials(other.full_name),
-        color: getColor(other.id),
-        lastMsg: msg.content,
-        time: timeAgo(msg.created_at),
-        unread,
-        online: false,
-        userId: other.id,
-      });
-    }
-    setConversations(convs);
   }
+  setConversations(convs);
+}
 
   async function fetchMessages(userId: string, otherId: string) {
     if (otherId === "saved") {
@@ -188,8 +194,8 @@ export default function JugalbandiApp() {
         const updated = payload.new as Message;
         if (updated.sender_id !== user.id && updated.receiver_id !== user.id) return;
         setMessages(prev =>
-          prev.map(m => m.id === updated.id ? { ...m, is_read: updated.is_read } : m)
-        );
+  prev.map(m => m.id === updated.id ? { ...m, is_read: updated.is_read, is_delivered: updated.is_delivered } : m)
+);
       })
       .subscribe();
     return () => { supabase.removeChannel(channel); };
