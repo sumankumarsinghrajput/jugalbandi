@@ -74,8 +74,7 @@ export default function JugalbandiApp() {
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (!session) { window.location.href = "/auth"; return; }
       setUser(session.user);
-      fetchProfile(session.user.id);
-      setLoading(false);
+      fetchProfile(session.user.id).then(() => setLoading(false));
     });
   }, []);
 
