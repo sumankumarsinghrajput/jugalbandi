@@ -26,11 +26,14 @@ const SUGGESTIONS = [
 export default function AIAssistant() {
   const [messages, setMessages] = useState<Message[]>(() => {
   if (typeof window !== "undefined") {
-    const saved = localStorage.getItem("jugalbandi-ai-chat");
-    return saved ? JSON.parse(saved) : [];
+    try {
+      const saved = localStorage.getItem("jugalbandi-ai-chat");
+      return saved ? JSON.parse(saved) : [];
+    } catch { return []; }
   }
   return [];
 });
+
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [profile, setProfile] = useState<any>(null);
@@ -47,7 +50,7 @@ export default function AIAssistant() {
   }, []);
 
   useEffect(() => {
-  if (messages.length > 0) {
+  if (typeof window !== "undefined" && messages.length > 0) {
     localStorage.setItem("jugalbandi-ai-chat", JSON.stringify(messages));
   }
 }, [messages]);
@@ -116,6 +119,10 @@ const aiText = data.text || "Sorry, I couldn't generate a response.";
   function clearChat() {
   setMessages([]);
   localStorage.removeItem("jugalbandi-ai-chat");
+
+  useEffect(() => {
+  messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+}, [messages]);
 }
 
   // Simple markdown renderer

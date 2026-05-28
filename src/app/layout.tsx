@@ -30,12 +30,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
         <meta name="theme-color" content="#1a6fff" />
       </head>
-      <body>
-        {children}
-        <script dangerouslySetInnerHTML={{
-          __html: `if('serviceWorker' in navigator){window.addEventListener('load',function(){navigator.serviceWorker.register('/sw.js');});}`
-        }} />
-      </body>
+      <body>{children}</body>
     </html>
   );
 }

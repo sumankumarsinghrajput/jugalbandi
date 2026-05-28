@@ -71,16 +71,13 @@ export default function JugalbandiApp() {
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-  supabase.auth.getSession().then(({ data: { session } }) => {
-    if (!session) { window.location.href = "/auth"; return; }
-    setUser(session.user);
-    supabase.from("profiles").select("*").eq("id", session.user.id).single()
-      .then(({ data }) => {
-        if (data) setProfile(data);
-        setLoading(false);
-      });
-  });
-}, []);
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!session) { window.location.href = "/auth"; return; }
+      setUser(session.user);
+      fetchProfile(session.user.id);
+      setLoading(false);
+    });
+  }, []);
 
   async function fetchProfile(userId: string) {
     const { data } = await supabase.from("profiles").select("*").eq("id", userId).single();
