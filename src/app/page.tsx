@@ -238,6 +238,7 @@ export default function JugalbandiApp() {
       receiver_id: receiverId,
       created_at: new Date().toISOString(),
       is_read: false,
+      is_delivered: false,
     };
     setMessages(prev => [...prev, optimisticMsg]);
     const { data, error } = await supabase.from("messages")
