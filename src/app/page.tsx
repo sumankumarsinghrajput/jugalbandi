@@ -15,6 +15,7 @@ type Message = {
   receiver_id: string;
   created_at: string;
   is_read: boolean;
+  is_delivered: boolean;
 };
 
 type Profile = {
@@ -85,11 +86,11 @@ export default function JugalbandiApp() {
   }
 
   async function fetchConversations(userId: string) {
-    const { data } = await supabase
-      .from("messages")
-      .select("*, sender:profiles!messages_sender_id_fkey(id,full_name,username), receiver:profiles!messages_receiver_id_fkey(id,full_name,username)")
-      .or(`sender_id.eq.${userId},receiver_id.eq.${userId}`)
-      .order("created_at", { ascending: false });
+  // Mark all received messages as delivered
+  await supabase.from("messages")
+    .update({ is_delivered: true })
+    .eq("receiver_id", userId)
+    .eq("is_delivered", false);
 
     if (!data) return;
 
@@ -532,6 +533,8 @@ export default function JugalbandiApp() {
                           {isSent && (
   msg.is_read
     ? <CheckCheck size={12} style={{ color: "#60a5fa" }} />
+    : msg.is_delivered
+    ? <CheckCheck size={12} style={{ color: "rgba(255,255,255,0.4)" }} />
     : <Check size={12} style={{ color: "rgba(255,255,255,0.4)" }} />
 )}
                         </div>
