@@ -65,31 +65,20 @@ export default function AIAssistant() {
     }));
 
     try {
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.NEXT_PUBLIC_GEMINI_API_KEY}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            system_instruction: {
-              parts: [{
-                text: `You are Jugalbandi AI, a smart, friendly, and helpful assistant built into the Jugalbandi messaging app. You help users with writing, coding, translation, summarization, creative tasks, and general knowledge. Keep responses concise, clear, and well-formatted. Use markdown for code blocks and lists when appropriate. The user's name is ${profile?.full_name || "there"}.`
-              }]
-            },
-            contents: [
-              ...history,
-              { role: "user", parts: [{ text: content }] }
-            ],
-            generationConfig: {
-              temperature: 0.9,
-              maxOutputTokens: 1024,
-            },
-          }),
-        }
-      );
+      const response = await fetch("/api/gemini", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    systemPrompt: `You are Jugalbandi AI, a smart, friendly, and helpful assistant built into the Jugalbandi messaging app. You help users with writing, coding, translation, summarization, creative tasks, and general knowledge. Keep responses concise, clear, and well-formatted. Use markdown for code blocks and lists when appropriate. The user's name is ${profile?.full_name || "there"}.`,
+    messages: [
+      ...history,
+      { role: "user", parts: [{ text: content }] }
+    ],
+  }),
+});
 
-      const data = await response.json();
-      const aiText = data?.candidates?.[0]?.content?.parts?.[0]?.text || "Sorry, I couldn't generate a response. Please try again.";
+const data = await response.json();
+const aiText = data.text || "Sorry, I couldn't generate a response.";
 
       const aiMsg: Message = {
         id: "a-" + Date.now(),
