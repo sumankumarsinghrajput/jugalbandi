@@ -32,6 +32,9 @@ export default function RootLayout({
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
         <meta name="theme-color" content="#1a6fff" />
+        <meta httpEquiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+<meta httpEquiv="Pragma" content="no-cache" />
+<meta httpEquiv="Expires" content="0" />
       </head>
       <body>
   {children}
