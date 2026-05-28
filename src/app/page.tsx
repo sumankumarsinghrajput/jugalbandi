@@ -317,6 +317,10 @@ export default function JugalbandiApp() {
     setActiveChat(chat);
     setShowChat(true);
     setMessages([]);
+    // Clear unread badge
+    setConversations(prev =>
+      prev.map(c => c.id === chat.id ? { ...c, unread: 0 } : c)
+    );
   }
 
   function backToList() {
