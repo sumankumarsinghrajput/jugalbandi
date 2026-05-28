@@ -5,7 +5,7 @@ import {
   Search, Settings, Bell, Edit, Phone, Video,
   Smile, Paperclip, Mic, Send, MoreVertical,
   Users, Hash, Star, Zap,
-  CheckCheck, Shield, LogOut, ArrowLeft, UserPlus, X,
+  Check, CheckCheck, Shield, LogOut, ArrowLeft, UserPlus, X,
 } from "lucide-react";
 
 type Message = {
@@ -521,7 +521,11 @@ export default function JugalbandiApp() {
                         </div>
                         <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 3, justifyContent: isSent ? "flex-end" : "flex-start" }}>
                           <span style={{ fontSize: 11, color: "rgba(255,255,255,0.35)" }}>{time}</span>
-                          {isSent && <CheckCheck size={12} style={{ color: msg.is_read ? "#60a5fa" : "rgba(255,255,255,0.4)" }} />}
+                          {isSent && (
+  msg.is_read
+    ? <CheckCheck size={12} style={{ color: "#60a5fa" }} />
+    : <Check size={12} style={{ color: "rgba(255,255,255,0.4)" }} />
+)}
                         </div>
                       </div>
                     </div>
