@@ -42,13 +42,15 @@ export default function AuthPage() {
           min-height: 100vh;
           min-height: 100dvh;
           display: flex;
-          flex-direction: column;
           align-items: center;
           justify-content: center;
-          padding: 20px 20px;
+          padding: 20px;
           background: #0a0e1a;
+          background-image: radial-gradient(rgba(26,111,255,0.08) 1px, transparent 1px);
+          background-size: 32px 32px;
         }
-        .auth-card { width: 100%; max-width: 400px; }
+        .auth-card { width: 100%; max-width: 460px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.07); border-radius: 24px; padding: 32px; }
+@media (max-width: 480px) { .auth-card { padding: 0; background: none; border: none; border-radius: 0; } }
         .features-row {
           display: flex;
           gap: 8px;
