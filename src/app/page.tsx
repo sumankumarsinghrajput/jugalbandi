@@ -521,12 +521,12 @@ export default function JugalbandiApp() {
             {[
               { icon: <Edit size={16} />, active: true },
               { icon: <Users size={16} /> },
-              { icon: <Hash size={16} /> },
+              { icon: <Zap size={16} />, link: "/ai" },
               { icon: <Star size={16} /> },
               { icon: <Bell size={16} /> },
               { icon: <Settings size={16} /> },
             ].map((item, i) => (
-              <div key={i} style={{ flex: 1, height: 34, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", background: item.active ? "rgba(26,111,255,0.2)" : "transparent", color: item.active ? "#60a5fa" : "rgba(255,255,255,0.35)" }}>
+              <div key={i} onClick={() => { if ((item as any).link) window.location.href = (item as any).link; }} style={{ flex: 1, height: 34, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", background: item.active ? "rgba(26,111,255,0.2)" : "transparent", color: item.active ? "#60a5fa" : "rgba(255,255,255,0.35)" }}>
                 {item.icon}
               </div>
             ))}
