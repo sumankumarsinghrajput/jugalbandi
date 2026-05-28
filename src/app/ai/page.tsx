@@ -66,7 +66,7 @@ export default function AIAssistant() {
 
     try {
       const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${process.env.NEXT_PUBLIC_GEMINI_API_KEY}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.NEXT_PUBLIC_GEMINI_API_KEY}`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -166,7 +166,7 @@ export default function AIAssistant() {
         .icon-btn:hover { background: rgba(255,255,255,0.1); }
       `}</style>
 
-      <div style={{ height: "100vh", height: "100dvh", background: "#0a0e1a", display: "flex", flexDirection: "column", fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+      <div style={{ height: "100dvh", background: "#0a0e1a", display: "flex", flexDirection: "column", fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
 
         {/* Header */}
         <div style={{ padding: "12px 16px", borderBottom: "1px solid rgba(255,255,255,0.07)", display: "flex", alignItems: "center", gap: 12, background: "#0f1525", flexShrink: 0 }}>
