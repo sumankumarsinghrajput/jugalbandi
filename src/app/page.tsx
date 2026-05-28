@@ -92,51 +92,29 @@ export default function JugalbandiApp() {
     fetchMessages(user.id);
 
     const channel = supabase
-      .channel("realtime-messages-" + user.id)
+      .channel("realtime-" + user.id)
       .on("postgres_changes", {
         event: "INSERT",
         schema: "public",
         table: "messages",
-        filter: `sender_id=eq.${user.id}`,
       }, (payload) => {
+        const newMsg = payload.new as Message;
+        if (newMsg.sender_id !== user.id && newMsg.receiver_id !== user.id) return;
         setMessages(prev => {
-          const exists = prev.find(m => m.id === (payload.new as Message).id);
-          if (exists) return prev;
-          return [...prev, payload.new as Message];
+          const optimisticIndex = prev.findIndex(
+            m => m.id.startsWith("optimistic-") &&
+            m.content === newMsg.content &&
+            m.sender_id === newMsg.sender_id
+          );
+          if (optimisticIndex !== -1) {
+            const updated = [...prev];
+            updated[optimisticIndex] = newMsg;
+            return updated;
+          }
+          if (prev.some(m => m.id === newMsg.id)) return prev;
+          return [...prev, newMsg];
         });
       })
-      useEffect(() => {
-  if (!user) return;
-  fetchMessages(user.id);
-
-  const channel = supabase
-    .channel("realtime-" + user.id)
-    .on("postgres_changes", {
-      event: "INSERT",
-      schema: "public",
-      table: "messages",
-    }, (payload) => {
-      const newMsg = payload.new as Message;
-      setMessages(prev => {
-        const alreadyExists = prev.some(
-          m => m.id === newMsg.id || m.id.startsWith("optimistic-")
-            && (m as any).content === newMsg.content
-            && m.sender_id === newMsg.sender_id
-        );
-        if (alreadyExists) {
-          return prev.map(m =>
-            m.id.startsWith("optimistic-") && m.content === newMsg.content
-              ? newMsg
-              : m
-          );
-        }
-        return [...prev, newMsg];
-      });
-    })
-    .subscribe();
-
-  return () => { supabase.removeChannel(channel); };
-}, [user]);
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
