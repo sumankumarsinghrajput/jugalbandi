@@ -78,9 +78,8 @@ export default function JugalbandiApp() {
       .then(({ data }) => {
         if (data) setProfile(data);
         setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }).catch(() => { window.location.href = "/auth"; });
+      });
+  });
 }, []);
 
   async function fetchProfile(userId: string) {
