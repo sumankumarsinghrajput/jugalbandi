@@ -24,7 +24,13 @@ const SUGGESTIONS = [
 ];
 
 export default function AIAssistant() {
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<Message[]>(() => {
+  if (typeof window !== "undefined") {
+    const saved = localStorage.getItem("jugalbandi-ai-chat");
+    return saved ? JSON.parse(saved) : [];
+  }
+  return [];
+});
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [profile, setProfile] = useState<any>(null);
@@ -41,8 +47,10 @@ export default function AIAssistant() {
   }, []);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  if (messages.length > 0) {
+    localStorage.setItem("jugalbandi-ai-chat", JSON.stringify(messages));
+  }
+}, [messages]);
 
   async function sendMessage(text?: string) {
     const content = text || input.trim();
@@ -106,8 +114,9 @@ const aiText = data.text || "Sorry, I couldn't generate a response.";
   }
 
   function clearChat() {
-    setMessages([]);
-  }
+  setMessages([]);
+  localStorage.removeItem("jugalbandi-ai-chat");
+}
 
   // Simple markdown renderer
   function renderText(text: string) {

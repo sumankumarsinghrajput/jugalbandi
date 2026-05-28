@@ -70,7 +70,6 @@ export default function JugalbandiApp() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Auth
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (!session) { window.location.href = "/auth"; return; }
@@ -85,7 +84,6 @@ export default function JugalbandiApp() {
     if (data) setProfile(data);
   }
 
-  // Build conversations list
   async function fetchConversations(userId: string) {
     const { data } = await supabase
       .from("messages")
@@ -98,7 +96,6 @@ export default function JugalbandiApp() {
     const seen = new Set<string>();
     const convs: Conversation[] = [];
 
-    // Add Saved Messages first
     convs.push({
       id: "saved",
       name: "Saved Messages",
@@ -135,52 +132,31 @@ export default function JugalbandiApp() {
     setConversations(convs);
   }
 
-  // Fetch messages for active chat
   async function fetchMessages(userId: string, otherId: string) {
     if (otherId === "saved") {
       const { data } = await supabase
-        .from("messages")
-        .select("*")
-        .eq("sender_id", userId)
-        .eq("receiver_id", userId)
-        .order("created_at", { ascending: true })
-        .limit(100);
+        .from("messages").select("*")
+        .eq("sender_id", userId).eq("receiver_id", userId)
+        .order("created_at", { ascending: true }).limit(100);
       if (data) setMessages(data);
     } else {
       const { data } = await supabase
-        .from("messages")
-        .select("*")
-        .or(
-          `and(sender_id.eq.${userId},receiver_id.eq.${otherId}),and(sender_id.eq.${otherId},receiver_id.eq.${userId})`
-        )
-        .order("created_at", { ascending: true })
-        .limit(100);
+        .from("messages").select("*")
+        .or(`and(sender_id.eq.${userId},receiver_id.eq.${otherId}),and(sender_id.eq.${otherId},receiver_id.eq.${userId})`)
+        .order("created_at", { ascending: true }).limit(100);
       if (data) setMessages(data);
-      // Mark as read
-      await supabase
-        .from("messages")
-        .update({ is_read: true })
-        .eq("sender_id", otherId)
-        .eq("receiver_id", userId)
-        .eq("is_read", false);
+      await supabase.from("messages").update({ is_read: true })
+        .eq("sender_id", otherId).eq("receiver_id", userId).eq("is_read", false);
     }
   }
 
   useEffect(() => {
     if (!user) return;
     fetchConversations(user.id);
-
-    const channel = supabase
-      .channel("realtime-" + user.id)
-      .on("postgres_changes", {
-        event: "INSERT",
-        schema: "public",
-        table: "messages",
-      }, (payload) => {
+    const channel = supabase.channel("realtime-" + user.id)
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "messages" }, (payload) => {
         const newMsg = payload.new as Message;
         if (newMsg.sender_id !== user.id && newMsg.receiver_id !== user.id) return;
-
-        // Update messages if in correct chat
         setActiveChat(current => {
           if (!current) return current;
           const inThisChat =
@@ -189,13 +165,10 @@ export default function JugalbandiApp() {
               (newMsg.sender_id === user.id && newMsg.receiver_id === current.userId) ||
               (newMsg.sender_id === current.userId && newMsg.receiver_id === user.id)
             ));
-
           if (inThisChat) {
             setMessages(prev => {
               const optimisticIndex = prev.findIndex(
-                m => m.id.startsWith("optimistic-") &&
-                  m.content === newMsg.content &&
-                  m.sender_id === newMsg.sender_id
+                m => m.id.startsWith("optimistic-") && m.content === newMsg.content && m.sender_id === newMsg.sender_id
               );
               if (optimisticIndex !== -1) {
                 const updated = [...prev];
@@ -208,12 +181,8 @@ export default function JugalbandiApp() {
           }
           return current;
         });
-
-        // Refresh conversations
         fetchConversations(user.id);
-      })
-      .subscribe();
-
+      }).subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [user]);
 
@@ -227,17 +196,11 @@ export default function JugalbandiApp() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // Search users
   useEffect(() => {
-    if (!userSearch.trim() || !user) {
-      setSearchResults([]);
-      return;
-    }
+    if (!userSearch.trim() || !user) { setSearchResults([]); return; }
     const timer = setTimeout(async () => {
       setSearching(true);
-      const { data } = await supabase
-        .from("profiles")
-        .select("*")
+      const { data } = await supabase.from("profiles").select("*")
         .neq("id", user.id)
         .or(`username.ilike.%${userSearch}%,full_name.ilike.%${userSearch}%`)
         .limit(8);
@@ -252,9 +215,7 @@ export default function JugalbandiApp() {
     setSending(true);
     const content = message.trim();
     setMessage("");
-
     const receiverId = activeChat.saved ? user.id : activeChat.userId!;
-
     const optimisticMsg: Message = {
       id: "optimistic-" + Date.now(),
       content,
@@ -264,13 +225,9 @@ export default function JugalbandiApp() {
       is_read: false,
     };
     setMessages(prev => [...prev, optimisticMsg]);
-
-    const { data, error } = await supabase
-      .from("messages")
+    const { data, error } = await supabase.from("messages")
       .insert({ sender_id: user.id, receiver_id: receiverId, content })
-      .select()
-      .single();
-
+      .select().single();
     if (error) {
       setMessages(prev => prev.filter(m => m.id !== optimisticMsg.id));
     } else if (data) {
@@ -282,16 +239,9 @@ export default function JugalbandiApp() {
 
   function openUserChat(p: Profile) {
     const conv: Conversation = {
-      id: p.id,
-      name: p.full_name,
-      username: p.username,
-      avatar: getInitials(p.full_name),
-      color: getColor(p.id),
-      lastMsg: "",
-      time: "",
-      unread: 0,
-      online: false,
-      userId: p.id,
+      id: p.id, name: p.full_name, username: p.username,
+      avatar: getInitials(p.full_name), color: getColor(p.id),
+      lastMsg: "", time: "", unread: 0, online: false, userId: p.id,
     };
     setActiveChat(conv);
     setShowChat(true);
@@ -317,10 +267,7 @@ export default function JugalbandiApp() {
     setActiveChat(chat);
     setShowChat(true);
     setMessages([]);
-    // Clear unread badge
-    setConversations(prev =>
-      prev.map(c => c.id === chat.id ? { ...c, unread: 0 } : c)
-    );
+    setConversations(prev => prev.map(c => c.id === chat.id ? { ...c, unread: 0 } : c));
   }
 
   function backToList() {
@@ -330,7 +277,6 @@ export default function JugalbandiApp() {
   }
 
   const myInitials = profile?.full_name ? getInitials(profile.full_name) : "U";
-
   const filteredConvs = conversations.filter(c =>
     c.name.toLowerCase().includes(search.toLowerCase()) ||
     c.username.toLowerCase().includes(search.toLowerCase())
@@ -338,7 +284,7 @@ export default function JugalbandiApp() {
 
   if (loading) return (
     <div style={{ height: "100vh", background: "#0a0e1a", display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 16, fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
-      <div style={{ width: 64, height: 64, borderRadius: 20, background: "linear-gradient(135deg, #1a6fff, #0d4fd9)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 28, fontWeight: 800, color: "#fff" }}>J</div>
+      <img src="/icon-512.png" alt="Jugalbandi" style={{ width: 64, height: 64, borderRadius: 20 }} />
       <div style={{ color: "rgba(255,255,255,0.5)", fontSize: 15 }}>Loading Jugalbandi...</div>
     </div>
   );
@@ -364,20 +310,12 @@ export default function JugalbandiApp() {
         .msg-in { animation: fadeUp 0.2s ease forwards; }
         .search-overlay { position: absolute; inset: 0; z-index: 50; background: #0f1525; display: flex; flex-direction: column; }
         @media (max-width: 768px) {
-  .sidebar {
-    width: 100%; min-width: unset;
-    position: absolute; inset: 0; z-index: 10;
-    transition: transform 0.25s ease;
-  }
-  .sidebar.slide-out { transform: translateX(-100%); }
-  .chat-area {
-    position: absolute; inset: 0; z-index: 9;
-    transition: transform 0.25s ease;
-    transform: translateX(100%);
-  }
-  .chat-area:not(.slide-out) { transform: translateX(0); z-index: 11; }
-  .chat-area.slide-out { transform: translateX(100%); }
-}
+          .sidebar { width: 100%; min-width: unset; position: absolute; inset: 0; z-index: 10; transition: transform 0.25s ease; }
+          .sidebar.slide-out { transform: translateX(-100%); }
+          .chat-area { position: absolute; inset: 0; z-index: 9; transition: transform 0.25s ease; transform: translateX(100%); }
+          .chat-area:not(.slide-out) { transform: translateX(0); z-index: 11; }
+          .chat-area.slide-out { transform: translateX(100%); }
+        }
       `}</style>
 
       <div className="app">
@@ -392,24 +330,17 @@ export default function JugalbandiApp() {
                 <button className="icon-btn" onClick={() => { setShowSearch(false); setUserSearch(""); setSearchResults([]); }}>
                   <ArrowLeft size={17} />
                 </button>
-                <input
-                  autoFocus
-                  value={userSearch}
-                  onChange={e => setUserSearch(e.target.value)}
-                  placeholder="Search by name or username..."
-                  style={{ flex: 1, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 10, padding: "9px 12px", color: "#fff", fontSize: 14 }}
-                />
+                <input autoFocus value={userSearch} onChange={e => setUserSearch(e.target.value)} placeholder="Search by name or username..."
+                  style={{ flex: 1, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 10, padding: "9px 12px", color: "#fff", fontSize: 14 }} />
                 {userSearch && <button className="icon-btn" onClick={() => setUserSearch("")}><X size={15} /></button>}
               </div>
               <div style={{ flex: 1, overflowY: "auto", padding: "8px 0" }}>
-                {searching && (
-                  <div style={{ padding: "20px", textAlign: "center", color: "rgba(255,255,255,0.3)", fontSize: 13 }}>Searching...</div>
-                )}
+                {searching && <div style={{ padding: "20px", textAlign: "center", color: "rgba(255,255,255,0.3)", fontSize: 13 }}>Searching...</div>}
                 {!searching && userSearch && searchResults.length === 0 && (
                   <div style={{ padding: "20px", textAlign: "center", color: "rgba(255,255,255,0.3)", fontSize: 13 }}>No users found for "{userSearch}"</div>
                 )}
                 {searchResults.map(p => (
-                  <div key={p.id} onClick={() => openUserChat(p)} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", cursor: "pointer", transition: "background 0.15s" }}
+                  <div key={p.id} onClick={() => openUserChat(p)} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", cursor: "pointer" }}
                     onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.05)")}
                     onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
                     <div style={{ width: 44, height: 44, borderRadius: "50%", background: getColor(p.id), display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 700, color: "#fff", flexShrink: 0 }}>
@@ -419,9 +350,7 @@ export default function JugalbandiApp() {
                       <div style={{ fontSize: 14, fontWeight: 600, color: "#fff" }}>{p.full_name}</div>
                       <div style={{ fontSize: 12, color: "#60a5fa" }}>@{p.username}</div>
                     </div>
-                    <div style={{ marginLeft: "auto" }}>
-                      <div style={{ padding: "5px 12px", borderRadius: 8, background: "rgba(26,111,255,0.2)", color: "#60a5fa", fontSize: 12, fontWeight: 600 }}>Chat</div>
-                    </div>
+                    <div style={{ marginLeft: "auto", padding: "5px 12px", borderRadius: 8, background: "rgba(26,111,255,0.2)", color: "#60a5fa", fontSize: 12, fontWeight: 600 }}>Chat</div>
                   </div>
                 ))}
                 {!userSearch && (
@@ -429,9 +358,7 @@ export default function JugalbandiApp() {
                     <div style={{ width: 56, height: 56, borderRadius: "50%", background: "rgba(26,111,255,0.15)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 12px" }}>
                       <Users size={24} style={{ color: "#60a5fa" }} />
                     </div>
-                    <div style={{ fontSize: 14, color: "rgba(255,255,255,0.4)", lineHeight: 1.7 }}>
-                      Search for any Jugalbandi user<br />by their name or @username
-                    </div>
+                    <div style={{ fontSize: 14, color: "rgba(255,255,255,0.4)", lineHeight: 1.7 }}>Search for any Jugalbandi user<br />by their name or @username</div>
                   </div>
                 )}
               </div>
@@ -442,16 +369,12 @@ export default function JugalbandiApp() {
           <div style={{ padding: "14px 16px 12px", borderBottom: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <div style={{ width: 34, height: 34, borderRadius: 10, background: "linear-gradient(135deg, #1a6fff, #0d4fd9)", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 15, color: "#fff", flexShrink: 0 }}>J</div>
+                <img src="/icon-192.png" alt="Jugalbandi" style={{ width: 34, height: 34, borderRadius: 10, flexShrink: 0, objectFit: "cover" }} />
                 <span style={{ fontSize: 19, fontWeight: 700, color: "#ffffff" }}>Jugalbandi</span>
               </div>
               <div style={{ display: "flex", gap: 6 }}>
-                <button className="icon-btn" title="New chat" onClick={() => setShowSearch(true)}>
-                  <UserPlus size={15} />
-                </button>
-                <button className="icon-btn" onClick={handleLogout} style={{ color: "rgba(255,100,100,0.8)" }}>
-                  <LogOut size={15} />
-                </button>
+                <button className="icon-btn" title="New chat" onClick={() => setShowSearch(true)}><UserPlus size={15} /></button>
+                <button className="icon-btn" onClick={handleLogout} style={{ color: "rgba(255,100,100,0.8)" }}><LogOut size={15} /></button>
               </div>
             </div>
 
@@ -468,7 +391,8 @@ export default function JugalbandiApp() {
             {/* Search */}
             <div style={{ position: "relative" }}>
               <Search size={14} style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", color: "rgba(255,255,255,0.35)", pointerEvents: "none" }} />
-              <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search conversations..." style={{ width: "100%", background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: 10, padding: "9px 10px 9px 34px", color: "#ffffff", fontSize: 13 }} />
+              <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search conversations..."
+                style={{ width: "100%", background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: 10, padding: "9px 10px 9px 34px", color: "#ffffff", fontSize: 13 }} />
             </div>
           </div>
 
@@ -526,7 +450,8 @@ export default function JugalbandiApp() {
               { icon: <Bell size={16} /> },
               { icon: <Settings size={16} /> },
             ].map((item, i) => (
-              <div key={i} onClick={() => { if ((item as any).link) window.location.href = (item as any).link; }} style={{ flex: 1, height: 34, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", background: item.active ? "rgba(26,111,255,0.2)" : "transparent", color: item.active ? "#60a5fa" : "rgba(255,255,255,0.35)" }}>
+              <div key={i} onClick={() => { if ((item as any).link) window.location.href = (item as any).link; }}
+                style={{ flex: 1, height: 34, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", background: item.active ? "rgba(26,111,255,0.2)" : "transparent", color: item.active ? "#60a5fa" : "rgba(255,255,255,0.35)" }}>
                 {item.icon}
               </div>
             ))}
@@ -609,14 +534,10 @@ export default function JugalbandiApp() {
               <div style={{ padding: "10px 12px", borderTop: "1px solid rgba(255,255,255,0.07)", background: "#0f1525", flexShrink: 0 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 14, padding: "7px 10px" }}>
                   <Smile size={20} style={{ color: "rgba(255,255,255,0.4)", cursor: "pointer", flexShrink: 0 }} />
-                  <input
-                    ref={inputRef}
-                    value={message}
-                    onChange={e => setMessage(e.target.value)}
+                  <input ref={inputRef} value={message} onChange={e => setMessage(e.target.value)}
                     onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
                     placeholder={activeChat.saved ? "Write a note to yourself..." : `Message ${activeChat.name}...`}
-                    style={{ flex: 1, background: "transparent", border: "none", color: "#ffffff", fontSize: 14, padding: "3px 0", minWidth: 0 }}
-                  />
+                    style={{ flex: 1, background: "transparent", border: "none", color: "#ffffff", fontSize: 14, padding: "3px 0", minWidth: 0 }} />
                   <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
                     <Paperclip size={18} style={{ color: "rgba(255,255,255,0.4)", cursor: "pointer" }} />
                     {message.trim() ? (
@@ -638,12 +559,10 @@ export default function JugalbandiApp() {
             </>
           ) : (
             <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 18 }}>
-              <div style={{ width: 88, height: 88, borderRadius: 26, background: "linear-gradient(135deg, #1a6fff, #0d4fd9)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 40, fontWeight: 800, color: "#fff" }}>J</div>
+              <img src="/icon-512.png" alt="Jugalbandi" style={{ width: 88, height: 88, borderRadius: 26 }} />
               <div style={{ textAlign: "center" }}>
                 <div style={{ fontSize: 22, fontWeight: 700, color: "rgba(255,255,255,0.7)", marginBottom: 8 }}>Welcome, {profile?.full_name?.split(" ")[0] || "there"}!</div>
-                <div style={{ fontSize: 14, color: "rgba(255,255,255,0.3)", lineHeight: 1.7, marginBottom: 20 }}>
-                  Select a conversation or start a new one.
-                </div>
+                <div style={{ fontSize: 14, color: "rgba(255,255,255,0.3)", lineHeight: 1.7, marginBottom: 20 }}>Select a conversation or start a new one.</div>
                 <button onClick={() => setShowSearch(true)} style={{ padding: "11px 24px", background: "linear-gradient(135deg, #1a6fff, #0d4fd9)", border: "none", borderRadius: 12, color: "#fff", fontSize: 14, fontWeight: 600, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 8 }}>
                   <UserPlus size={16} /> Find someone to chat
                 </button>
