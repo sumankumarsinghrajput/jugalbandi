@@ -182,7 +182,15 @@ export default function JugalbandiApp() {
           return current;
         });
         fetchConversations(user.id);
-      }).subscribe();
+      })
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "messages" }, (payload) => {
+        const updated = payload.new as Message;
+        if (updated.sender_id !== user.id && updated.receiver_id !== user.id) return;
+        setMessages(prev =>
+          prev.map(m => m.id === updated.id ? { ...m, is_read: updated.is_read } : m)
+        );
+      })
+      .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [user]);
 
