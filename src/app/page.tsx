@@ -7,7 +7,7 @@ import {
   Users, Star, Zap,
   Check, CheckCheck, Shield, LogOut, ArrowLeft, UserPlus, X,
   FileText, Film, Music, Archive, Download, Image, Info,
-  MessageCircle,
+  MessageCircle, CornerUpLeft,
 } from "lucide-react";
 
 type Message = {
@@ -22,6 +22,10 @@ type Message = {
   file_type?: string;
   file_name?: string;
   file_size?: number;
+  reactions?: Record<string, string[]>;
+  reply_to_id?: string;
+  reply_to_content?: string;
+  reply_to_sender?: string;
 };
 
 type Profile = {
@@ -99,6 +103,18 @@ const getFileIcon = (type: string) => {
   return <Archive size={20} />;
 };
 
+const REACTION_EMOJIS = ["❤️","👍","😂","😮","😢","🔥","👏","🙏"];
+const EMOJI_GRID = [
+  "😀","😂","🤣","😊","😍","🥰","😎","🤩","😜","🤔",
+  "😮","😢","😭","😡","🤯","🥳","😴","🤗","😬","🙄",
+  "❤️","🧡","💛","💚","💙","💜","💔","💕","🖤","🤍",
+  "👍","👎","👏","🙌","🤝","💪","👌","✌️","🫡","🙏",
+  "🔥","✨","🎉","💯","⭐","🌟","💫","🎈","🎁","🎊",
+  "😋","🥺","😇","🤭","😌","🥹","🫠","😏","😑","🤐",
+  "🐶","🐱","🐭","🐸","🦁","🐧","🦋","🌸","🌈","☀️",
+  "🍕","🍔","🍜","🍣","🍦","☕","🧋","🍺","🥂","🍾",
+];
+
 const CLOUD_NAME = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME;
 const UPLOAD_PRESET = process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET;
 
@@ -134,12 +150,22 @@ export default function JugalbandiApp() {
   const [profilePanel, setProfilePanel] = useState<ViewProfile | null>(null);
   const [avatarPopup, setAvatarPopup] = useState<AvatarPopup | null>(null);
   const [showMenu, setShowMenu] = useState(false);
+  const [replyTo, setReplyTo] = useState<Message | null>(null);
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [reactionPickerMsgId, setReactionPickerMsgId] = useState<string | null>(null);
+  const [hoveredMsgId, setHoveredMsgId] = useState<string | null>(null);
+  const [swipingMsgId, setSwipingMsgId] = useState<string | null>(null);
+  const [swipeOffset, setSwipeOffset] = useState(0);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const activeChatRef = useRef<Conversation | null>(null);
   const isInitialLoad = useRef(true);
+  const touchStartX = useRef(0);
+  const touchStartY = useRef(0);
+  const touchMsgRef = useRef<Message | null>(null);
+  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // AUTH
   useEffect(() => {
@@ -167,10 +193,7 @@ export default function JugalbandiApp() {
       if (activeChat.userId) {
         supabase.from("profiles").select("last_seen, avatar_url, bio").eq("id", activeChat.userId).single()
           .then(({ data }) => {
-            if (data) {
-              setChatUserLastSeen(data.last_seen);
-              setActiveChat(prev => prev ? { ...prev, avatar_url: data.avatar_url } : prev);
-            }
+            if (data) { setChatUserLastSeen(data.last_seen); setActiveChat(prev => prev ? { ...prev, avatar_url: data.avatar_url } : prev); }
           });
       } else { setChatUserLastSeen(null); }
     }
@@ -281,7 +304,7 @@ export default function JugalbandiApp() {
       .on("postgres_changes", { event: "UPDATE", schema: "public", table: "messages" }, (payload) => {
         const u = payload.new as Message;
         if (u.sender_id !== user.id && u.receiver_id !== user.id) return;
-        setMessages(prev => prev.map(m => m.id === u.id ? { ...m, is_read: u.is_read, is_delivered: u.is_delivered } : m));
+        setMessages(prev => prev.map(m => m.id === u.id ? { ...m, is_read: u.is_read, is_delivered: u.is_delivered, reactions: u.reactions } : m));
       }).subscribe();
     return () => { supabase.removeChannel(ch); };
   }, [user]);
@@ -301,6 +324,55 @@ export default function JugalbandiApp() {
     }, 300);
     return () => clearTimeout(t);
   }, [userSearch, user]);
+
+  // Swipe to reply (mobile)
+  function handleTouchStart(e: React.TouchEvent, msg: Message) {
+    touchStartX.current = e.touches[0].clientX;
+    touchStartY.current = e.touches[0].clientY;
+    touchMsgRef.current = msg;
+  }
+
+  function handleTouchMove(e: React.TouchEvent) {
+    if (!touchMsgRef.current) return;
+    const dx = e.touches[0].clientX - touchStartX.current;
+    const dy = Math.abs(e.touches[0].clientY - touchStartY.current);
+    if (dy > 20) { touchMsgRef.current = null; setSwipingMsgId(null); setSwipeOffset(0); return; }
+    if (dx > 0 && dx < 100) {
+      setSwipingMsgId(touchMsgRef.current.id);
+      setSwipeOffset(dx);
+    }
+  }
+
+  function handleTouchEnd() {
+    if (swipeOffset > 60 && touchMsgRef.current) {
+      setReplyTo(touchMsgRef.current);
+      if (navigator.vibrate) navigator.vibrate(30);
+      setTimeout(() => inputRef.current?.focus(), 100);
+    }
+    setSwipingMsgId(null);
+    setSwipeOffset(0);
+    touchMsgRef.current = null;
+  }
+
+  // Reactions
+  async function toggleReaction(messageId: string, emoji: string) {
+    setReactionPickerMsgId(null);
+    const msg = messages.find(m => m.id === messageId);
+    if (!msg) return;
+    const reactions = { ...(msg.reactions || {}) };
+    const users: string[] = reactions[emoji] ? [...reactions[emoji]] : [];
+    const hasReacted = users.includes(user.id);
+    if (hasReacted) {
+      const newUsers = users.filter(id => id !== user.id);
+      if (newUsers.length === 0) delete reactions[emoji];
+      else reactions[emoji] = newUsers;
+    } else {
+      reactions[emoji] = [...users, user.id];
+    }
+    // Optimistic update
+    setMessages(prev => prev.map(m => m.id === messageId ? { ...m, reactions } : m));
+    await supabase.from("messages").update({ reactions }).eq("id", messageId);
+  }
 
   async function uploadFile(file: File) {
     if (!CLOUD_NAME || !UPLOAD_PRESET) { alert("Cloudinary not configured."); return null; }
@@ -332,11 +404,26 @@ export default function JugalbandiApp() {
   async function sendMessage() {
     if (!message.trim() || !user || sending || !activeChat) return;
     setSending(true);
-    const content = message.trim(); setMessage("");
+    const content = message.trim();
+    setMessage("");
+    const currentReplyTo = replyTo;
+    setReplyTo(null);
+    setShowEmojiPicker(false);
     const rid = activeChat.saved ? user.id : activeChat.userId!;
-    const opt: Message = { id: "optimistic-" + Date.now(), content, sender_id: user.id, receiver_id: rid, created_at: new Date().toISOString(), is_read: false, is_delivered: false };
+    const opt: Message = {
+      id: "optimistic-" + Date.now(), content, sender_id: user.id, receiver_id: rid,
+      created_at: new Date().toISOString(), is_read: false, is_delivered: false,
+      reply_to_id: currentReplyTo?.id, reply_to_content: currentReplyTo?.file_url ? "📎 File" : currentReplyTo?.content,
+      reply_to_sender: currentReplyTo ? (currentReplyTo.sender_id === user.id ? "You" : activeChat.name) : undefined,
+    };
     setMessages(prev => [...prev, opt]);
-    const { data, error } = await supabase.from("messages").insert({ sender_id: user.id, receiver_id: rid, content }).select().single();
+    const insertData: any = { sender_id: user.id, receiver_id: rid, content };
+    if (currentReplyTo) {
+      insertData.reply_to_id = currentReplyTo.id;
+      insertData.reply_to_content = currentReplyTo.file_url ? "📎 File" : currentReplyTo.content;
+      insertData.reply_to_sender = currentReplyTo.sender_id === user.id ? "You" : activeChat.name;
+    }
+    const { data, error } = await supabase.from("messages").insert(insertData).select().single();
     if (error) setMessages(prev => prev.filter(m => m.id !== opt.id));
     else if (data) { setMessages(prev => prev.map(m => m.id === opt.id ? data : m)); fetchConversations(user.id); }
     setSending(false);
@@ -384,64 +471,43 @@ export default function JugalbandiApp() {
   }
 
   function openChat(chat: Conversation) {
-    setActiveChat(chat); setShowChat(true); setMessages([]); setProfilePanel(null);
+    setActiveChat(chat); setShowChat(true); setMessages([]); setProfilePanel(null); setReplyTo(null); setShowEmojiPicker(false);
     setConversations(prev => prev.map(c => c.id === chat.id ? { ...c, unread: 0 } : c));
   }
 
-  function backToList() { setShowChat(false); setActiveChat(null); setMessages([]); setProfilePanel(null); }
+  function backToList() { setShowChat(false); setActiveChat(null); setMessages([]); setProfilePanel(null); setReplyTo(null); }
 
   const myInitials = profile?.full_name ? getInitials(profile.full_name) : "U";
   const filteredConvs = conversations.filter(c => c.name.toLowerCase().includes(search.toLowerCase()) || c.username.toLowerCase().includes(search.toLowerCase()));
 
-  if (loading) return (
-    <div style={{ height: "100vh", background: "#0a0e1a", display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 16, fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
-      <img src="/icon-512.png" style={{ width: 64, height: 64, borderRadius: 20 }} />
-      <div style={{ color: "rgba(255,255,255,0.5)", fontSize: 15 }}>Loading Jugalbandi...</div>
-    </div>
-  );
-
-  // Profile Panel Content
   const ProfilePanelContent = profilePanel ? (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", height: "100%", background: "#0a0e1a" }}>
-      {/* Header */}
       <div style={{ padding: "10px 14px", borderBottom: "1px solid rgba(255,255,255,0.07)", display: "flex", alignItems: "center", gap: 12, background: "#0f1525", flexShrink: 0 }}>
-        <button onClick={() => setProfilePanel(null)} style={{ width: 36, height: 36, borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(255,255,255,0.05)", border: "none", color: "rgba(255,255,255,0.6)", cursor: "pointer" }}>
-          <ArrowLeft size={17} />
-        </button>
+        <button onClick={() => setProfilePanel(null)} style={{ width: 36, height: 36, borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(255,255,255,0.05)", border: "none", color: "rgba(255,255,255,0.6)", cursor: "pointer" }}><ArrowLeft size={17} /></button>
         <span style={{ fontSize: 16, fontWeight: 700, color: "#fff" }}>Profile</span>
       </div>
-      {/* Content */}
-      <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", alignItems: "center", padding: "32px 20px 24px", gap: 0 }}>
-        {/* Avatar */}
+      <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", alignItems: "center", padding: "32px 20px 24px" }}>
         <div onClick={() => profilePanel.avatar_url && setLightboxImg(profilePanel.avatar_url)}
           style={{ width: 100, height: 100, borderRadius: "50%", background: profilePanel.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 30, fontWeight: 700, color: "#fff", overflow: "hidden", cursor: profilePanel.avatar_url ? "zoom-in" : "default", border: "3px solid rgba(255,255,255,0.1)", marginBottom: 16 }}>
           {profilePanel.avatar_url ? <img src={profilePanel.avatar_url} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : getInitials(profilePanel.name)}
         </div>
-        {/* Name */}
         <div style={{ fontSize: 22, fontWeight: 700, color: "#fff", textAlign: "center", marginBottom: 4 }}>{profilePanel.name}</div>
         <div style={{ fontSize: 14, color: "#60a5fa", marginBottom: 12 }}>@{profilePanel.username}</div>
-        {/* Online / Last seen */}
-        {profilePanel.online
-          ? <div style={{ padding: "4px 14px", background: "rgba(34,197,94,0.12)", border: "1px solid rgba(34,197,94,0.25)", borderRadius: 999, fontSize: 12, color: "#22c55e", marginBottom: 20 }}>● Online</div>
-          : profilePanel.last_seen
-          ? <div style={{ fontSize: 12, color: "rgba(255,255,255,0.35)", marginBottom: 20 }}>{lastSeenText(profilePanel.last_seen)}</div>
-          : null}
-        {/* Bio */}
+        {profilePanel.online ? <div style={{ padding: "4px 14px", background: "rgba(34,197,94,0.12)", border: "1px solid rgba(34,197,94,0.25)", borderRadius: 999, fontSize: 12, color: "#22c55e", marginBottom: 20 }}>● Online</div>
+          : profilePanel.last_seen ? <div style={{ fontSize: 12, color: "rgba(255,255,255,0.35)", marginBottom: 20 }}>{lastSeenText(profilePanel.last_seen)}</div> : null}
         {profilePanel.bio && (
           <div style={{ width: "100%", maxWidth: 400, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 14, padding: "14px 18px", marginBottom: 16 }}>
             <div style={{ fontSize: 11, color: "rgba(255,255,255,0.4)", marginBottom: 6, textTransform: "uppercase", letterSpacing: 1 }}>Bio</div>
             <div style={{ fontSize: 14, color: "rgba(255,255,255,0.8)", lineHeight: 1.6 }}>{profilePanel.bio}</div>
           </div>
         )}
-        {/* Message button if not own profile */}
         {profilePanel.id !== user?.id && (
           <button onClick={() => {
             const conv = conversations.find(c => c.userId === profilePanel.id);
-            if (conv) { openChat(conv); }
-            else {
-              const newConv: Conversation = { id: profilePanel.id, name: profilePanel.name, username: profilePanel.username, avatar: getInitials(profilePanel.name), avatar_url: profilePanel.avatar_url, color: profilePanel.color, lastMsg: "", time: "", unread: 0, online: false, userId: profilePanel.id };
-              setActiveChat(newConv); setShowChat(true); setMessages([]);
-              setConversations(prev => { const f = prev.filter(c => c.id !== profilePanel.id); const s = f.find(c => c.saved); const r = f.filter(c => !c.saved); return s ? [s, newConv, ...r] : [newConv, ...r]; });
+            if (conv) { openChat(conv); } else {
+              const nc: Conversation = { id: profilePanel.id, name: profilePanel.name, username: profilePanel.username, avatar: getInitials(profilePanel.name), avatar_url: profilePanel.avatar_url, color: profilePanel.color, lastMsg: "", time: "", unread: 0, online: false, userId: profilePanel.id };
+              setActiveChat(nc); setShowChat(true); setMessages([]);
+              setConversations(prev => { const f = prev.filter(c => c.id !== profilePanel.id); const s = f.find(c => c.saved); const r = f.filter(c => !c.saved); return s ? [s, nc, ...r] : [nc, ...r]; });
             }
             setProfilePanel(null);
           }} style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 32px", background: "linear-gradient(135deg, #1a6fff, #0d4fd9)", border: "none", borderRadius: 14, color: "#fff", fontSize: 14, fontWeight: 600, cursor: "pointer", marginTop: 8 }}>
@@ -451,6 +517,13 @@ export default function JugalbandiApp() {
       </div>
     </div>
   ) : null;
+
+  if (loading) return (
+    <div style={{ height: "100vh", background: "#0a0e1a", display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 16, fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+      <img src="/icon-512.png" style={{ width: 64, height: 64, borderRadius: 20 }} />
+      <div style={{ color: "rgba(255,255,255,0.5)", fontSize: 15 }}>Loading Jugalbandi...</div>
+    </div>
+  );
 
   return (
     <>
@@ -471,17 +544,23 @@ export default function JugalbandiApp() {
         .chat-item.active { background: rgba(26,111,255,0.12); border-left-color: #1a6fff; }
         @keyframes fadeUp { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
         .msg-in { animation: fadeUp 0.2s ease forwards; }
+        .msg-wrap { position: relative; }
+        .msg-wrap:hover .reply-btn { opacity: 1; }
+        .reply-btn { opacity: 0; transition: opacity 0.15s; }
         .search-overlay { position: absolute; inset: 0; z-index: 50; background: #0f1525; display: flex; flex-direction: column; }
+        .emoji-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 2px; }
         @media (max-width: 768px) {
           .sidebar { width: 100%; min-width: unset; position: absolute; inset: 0; z-index: 10; transition: transform 0.25s ease; }
           .sidebar.slide-out { transform: translateX(-100%); }
           .chat-area { position: absolute; inset: 0; z-index: 9; transition: transform 0.25s ease; transform: translateX(100%); }
           .chat-area:not(.slide-out) { transform: translateX(0); z-index: 11; }
           .chat-area.slide-out { transform: translateX(100%); }
+          .emoji-grid { grid-template-columns: repeat(6, 1fr); }
+          .reply-btn { opacity: 1 !important; }
         }
       `}</style>
 
-      <div className="app" onClick={() => { setAvatarPopup(null); setShowMenu(false); }}>
+      <div className="app" onClick={() => { setAvatarPopup(null); setShowMenu(false); setReactionPickerMsgId(null); setShowEmojiPicker(false); }}>
 
         {/* Lightbox */}
         {lightboxImg && (
@@ -494,9 +573,9 @@ export default function JugalbandiApp() {
           </div>
         )}
 
-        {/* Small Avatar Popup (sidebar only) */}
+        {/* Avatar Popup */}
         {avatarPopup && (
-          <div onClick={e => e.stopPropagation()} style={{ position: "fixed", top: Math.min(avatarPopup.y, window.innerHeight - 200), left: Math.min(avatarPopup.x, window.innerWidth - 220), zIndex: 200, background: "#1a2236", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 16, padding: "16px", width: 200, boxShadow: "0 12px 40px rgba(0,0,0,0.5)" }}>
+          <div onClick={e => e.stopPropagation()} style={{ position: "fixed", top: Math.min(avatarPopup.y, window.innerHeight - 210), left: Math.min(avatarPopup.x, window.innerWidth - 220), zIndex: 200, background: "#1a2236", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 16, padding: "16px", width: 200, boxShadow: "0 12px 40px rgba(0,0,0,0.5)" }}>
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
               <div style={{ width: 64, height: 64, borderRadius: "50%", background: avatarPopup.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, fontWeight: 700, color: "#fff", overflow: "hidden" }}>
                 {avatarPopup.avatar_url ? <img src={avatarPopup.avatar_url} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : getInitials(avatarPopup.name)}
@@ -529,18 +608,13 @@ export default function JugalbandiApp() {
                     onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.05)")}
                     onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
                     <Avatar url={p.avatar_url} initials={getInitials(p.full_name)} color={getColor(p.id)} size={44} />
-                    <div>
-                      <div style={{ fontSize: 14, fontWeight: 600, color: "#fff" }}>{p.full_name}</div>
-                      <div style={{ fontSize: 12, color: "#60a5fa" }}>@{p.username}</div>
-                    </div>
+                    <div><div style={{ fontSize: 14, fontWeight: 600, color: "#fff" }}>{p.full_name}</div><div style={{ fontSize: 12, color: "#60a5fa" }}>@{p.username}</div></div>
                     <div style={{ marginLeft: "auto", padding: "5px 12px", borderRadius: 8, background: "rgba(26,111,255,0.2)", color: "#60a5fa", fontSize: 12, fontWeight: 600 }}>Chat</div>
                   </div>
                 ))}
                 {!userSearch && (
                   <div style={{ padding: "24px 20px", textAlign: "center" }}>
-                    <div style={{ width: 56, height: 56, borderRadius: "50%", background: "rgba(26,111,255,0.15)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 12px" }}>
-                      <Users size={24} style={{ color: "#60a5fa" }} />
-                    </div>
+                    <div style={{ width: 56, height: 56, borderRadius: "50%", background: "rgba(26,111,255,0.15)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 12px" }}><Users size={24} style={{ color: "#60a5fa" }} /></div>
                     <div style={{ fontSize: 14, color: "rgba(255,255,255,0.4)", lineHeight: 1.7 }}>Search for any Jugalbandi user<br />by their name or @username</div>
                   </div>
                 )}
@@ -586,15 +660,14 @@ export default function JugalbandiApp() {
             {filteredConvs.length === 0 && (
               <div style={{ padding: "32px 20px", textAlign: "center" }}>
                 <div style={{ width: 52, height: 52, borderRadius: "50%", background: "rgba(26,111,255,0.12)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 12px" }}><UserPlus size={22} style={{ color: "#60a5fa" }} /></div>
-                <div style={{ fontSize: 13, color: "rgba(255,255,255,0.35)", lineHeight: 1.7 }}>No conversations yet.<br /><span onClick={() => setShowSearch(true)} style={{ color: "#60a5fa", cursor: "pointer" }}>Find someone to chat with →</span></div>
+                <div style={{ fontSize: 13, color: "rgba(255,255,255,0.35)", lineHeight: 1.7 }}>No conversations yet.<br /><span onClick={() => setShowSearch(true)} style={{ color: "#60a5fa", cursor: "pointer" }}>Find someone →</span></div>
               </div>
             )}
             {filteredConvs.map(chat => (
               <div key={chat.id} className={`chat-item${activeChat?.id === chat.id ? " active" : ""}`} onClick={() => openChat(chat)}>
                 <div style={{ position: "relative", flexShrink: 0 }}>
                   <div onClick={e => {
-                    if (!chat.userId) return;
-                    e.stopPropagation();
+                    if (!chat.userId) return; e.stopPropagation();
                     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
                     setAvatarPopup({ userId: chat.userId, name: chat.name, username: chat.username, avatar_url: chat.avatar_url, color: chat.color, x: rect.right + 8, y: rect.top });
                   }} style={{ width: 46, height: 46, borderRadius: "50%", background: chat.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: chat.saved ? 18 : 13, fontWeight: 700, color: "#fff", overflow: "hidden", cursor: chat.userId ? "pointer" : "default" }}>
@@ -628,8 +701,6 @@ export default function JugalbandiApp() {
 
         {/* CHAT AREA */}
         <div className={`chat-area${!showChat ? " slide-out" : ""}`} style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
-
-          {/* Profile Panel - replaces chat on desktop, full screen on mobile */}
           {profilePanel ? ProfilePanelContent : activeChat ? (
             <>
               {/* Chat Header */}
@@ -654,24 +725,15 @@ export default function JugalbandiApp() {
                     {showMenu && (
                       <div onClick={e => e.stopPropagation()} style={{ position: "absolute", top: 40, right: 0, background: "#1a2236", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 12, padding: "6px 0", minWidth: 170, zIndex: 100, boxShadow: "0 8px 32px rgba(0,0,0,0.4)" }}>
                         {activeChat.userId && (
-                          <div onClick={() => { setShowMenu(false); openProfilePanel(activeChat.userId!); }}
-                            style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", cursor: "pointer", color: "rgba(255,255,255,0.8)", fontSize: 13 }}
-                            onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.06)")}
-                            onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+                          <div onClick={() => { setShowMenu(false); openProfilePanel(activeChat.userId!); }} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", cursor: "pointer", color: "rgba(255,255,255,0.8)", fontSize: 13 }} onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.06)")} onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
                             <Info size={14} style={{ color: "#60a5fa" }} /> View Profile
                           </div>
                         )}
-                        <div onClick={() => { setShowMenu(false); window.location.href = "/profile"; }}
-                          style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", cursor: "pointer", color: "rgba(255,255,255,0.8)", fontSize: 13 }}
-                          onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.06)")}
-                          onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+                        <div onClick={() => { setShowMenu(false); window.location.href = "/profile"; }} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", cursor: "pointer", color: "rgba(255,255,255,0.8)", fontSize: 13 }} onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.06)")} onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
                           <Edit size={14} style={{ color: "#60a5fa" }} /> Edit My Profile
                         </div>
                         <div style={{ height: 1, background: "rgba(255,255,255,0.06)", margin: "4px 0" }} />
-                        <div onClick={() => { setShowMenu(false); setMessages([]); }}
-                          style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", cursor: "pointer", color: "rgba(255,100,100,0.8)", fontSize: 13 }}
-                          onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.06)")}
-                          onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+                        <div onClick={() => { setShowMenu(false); setMessages([]); }} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", cursor: "pointer", color: "rgba(255,100,100,0.8)", fontSize: 13 }} onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.06)")} onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
                           <X size={14} /> Clear Chat
                         </div>
                       </div>
@@ -682,19 +744,19 @@ export default function JugalbandiApp() {
 
               {uploading && (
                 <div style={{ padding: "8px 16px", background: "rgba(26,111,255,0.1)", borderBottom: "1px solid rgba(26,111,255,0.2)", display: "flex", alignItems: "center", gap: 10 }}>
-                  <div style={{ flex: 1, height: 4, background: "rgba(255,255,255,0.1)", borderRadius: 999 }}>
-                    <div style={{ height: "100%", background: "#1a6fff", borderRadius: 999, width: "60%" }} />
-                  </div>
+                  <div style={{ flex: 1, height: 4, background: "rgba(255,255,255,0.1)", borderRadius: 999 }}><div style={{ height: "100%", background: "#1a6fff", borderRadius: 999, width: "60%" }} /></div>
                   <span style={{ fontSize: 12, color: "#60a5fa" }}>Uploading...</span>
                 </div>
               )}
 
-              <div style={{ flex: 1, overflowY: "auto", padding: "16px 16px 8px", display: "flex", flexDirection: "column", gap: 6 }}>
+              {/* Messages */}
+              <div style={{ flex: 1, overflowY: "auto", padding: "16px 16px 8px", display: "flex", flexDirection: "column", gap: 4 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "4px 0 10px" }}>
                   <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.06)" }} />
                   <span style={{ fontSize: 11, color: "rgba(255,255,255,0.35)", padding: "2px 10px", background: "rgba(255,255,255,0.04)", borderRadius: 999 }}>Today</span>
                   <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.06)" }} />
                 </div>
+
                 {messages.length === 0 && (
                   <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 14, paddingBottom: 60, paddingTop: 40 }}>
                     <div style={{ width: 64, height: 64, borderRadius: "50%", background: `${activeChat.color}22`, display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -706,19 +768,101 @@ export default function JugalbandiApp() {
                     </div>
                   </div>
                 )}
+
                 {messages.map((msg) => {
                   const isSent = msg.sender_id === user?.id;
                   const time = new Date(msg.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+                  const isSwipingThis = swipingMsgId === msg.id;
+                  const hasReactions = msg.reactions && Object.keys(msg.reactions).length > 0;
+
                   return (
-                    <div key={msg.id} className="msg-in" style={{ display: "flex", justifyContent: isSent ? "flex-end" : "flex-start" }}>
-                      <div style={{ maxWidth: "75%" }}>
-                        <div style={{ padding: msg.file_url ? "6px" : "10px 14px", borderRadius: isSent ? "18px 18px 4px 18px" : "18px 18px 18px 4px", background: isSent ? "linear-gradient(135deg, #1a6fff, #0d4fd9)" : "rgba(20,26,44,1)", border: isSent ? "none" : "1px solid rgba(255,255,255,0.09)", color: "#fff", fontSize: 14, lineHeight: 1.55, wordBreak: "break-word" }}>
-                          {msg.file_url ? renderFileMessage(msg) : msg.content}
+                    <div key={msg.id} className="msg-in msg-wrap" style={{ marginBottom: hasReactions ? 20 : 2 }}
+                      onMouseEnter={() => setHoveredMsgId(msg.id)}
+                      onMouseLeave={() => { setHoveredMsgId(null); }}
+                    >
+                      <div style={{ display: "flex", justifyContent: isSent ? "flex-end" : "flex-start", alignItems: "center", gap: 6, position: "relative" }}>
+
+                        {/* Reply button — left side for received, right for sent (desktop hover + always mobile) */}
+                        {!isSent && (
+                          <button className="reply-btn" onClick={() => { setReplyTo(msg); inputRef.current?.focus(); }}
+                            style={{ width: 28, height: 28, borderRadius: "50%", background: "rgba(255,255,255,0.08)", border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                            <CornerUpLeft size={13} style={{ color: "rgba(255,255,255,0.5)" }} />
+                          </button>
+                        )}
+
+                        {/* Message bubble with swipe */}
+                        <div
+                          onTouchStart={e => handleTouchStart(e, msg)}
+                          onTouchMove={handleTouchMove}
+                          onTouchEnd={handleTouchEnd}
+                          style={{ maxWidth: "75%", transform: isSwipingThis ? `translateX(${Math.min(swipeOffset, 80)}px)` : "translateX(0)", transition: isSwipingThis ? "none" : "transform 0.2s ease", position: "relative" }}>
+                          {/* Swipe reply arrow */}
+                          {isSwipingThis && swipeOffset > 20 && (
+                            <div style={{ position: "absolute", left: -36, top: "50%", transform: "translateY(-50%)", opacity: Math.min(swipeOffset / 60, 1) }}>
+                              <CornerUpLeft size={18} style={{ color: "#60a5fa" }} />
+                            </div>
+                          )}
+
+                          {/* Reply preview inside bubble */}
+                          {msg.reply_to_content && (
+                            <div style={{ background: isSent ? "rgba(0,0,0,0.2)" : "rgba(255,255,255,0.07)", borderLeft: "3px solid #60a5fa", borderRadius: "8px 8px 0 0", padding: "6px 10px", marginBottom: -4 }}>
+                              <div style={{ fontSize: 11, color: "#60a5fa", fontWeight: 600, marginBottom: 2 }}>{msg.reply_to_sender}</div>
+                              <div style={{ fontSize: 12, color: "rgba(255,255,255,0.6)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 200 }}>{msg.reply_to_content}</div>
+                            </div>
+                          )}
+
+                          <div style={{ padding: msg.file_url ? "6px" : "10px 14px", borderRadius: msg.reply_to_content ? (isSent ? "0 18px 4px 18px" : "0 18px 18px 4px") : (isSent ? "18px 18px 4px 18px" : "18px 18px 18px 4px"), background: isSent ? "linear-gradient(135deg, #1a6fff, #0d4fd9)" : "rgba(20,26,44,1)", border: isSent ? "none" : "1px solid rgba(255,255,255,0.09)", color: "#fff", fontSize: 14, lineHeight: 1.55, wordBreak: "break-word" }}>
+                            {msg.file_url ? renderFileMessage(msg) : msg.content}
+                          </div>
+
+                          {/* Time + ticks */}
+                          <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 3, justifyContent: isSent ? "flex-end" : "flex-start" }}>
+                            <span style={{ fontSize: 11, color: "rgba(255,255,255,0.35)" }}>{time}</span>
+                            {isSent && (msg.is_read ? <CheckCheck size={12} style={{ color: "#60a5fa" }} /> : (msg.is_delivered || onlineUsers.has(activeChat?.userId || "")) ? <CheckCheck size={12} style={{ color: "rgba(255,255,255,0.4)" }} /> : <Check size={12} style={{ color: "rgba(255,255,255,0.4)" }} />)}
+                          </div>
+
+                          {/* Reactions display */}
+                          {hasReactions && (
+                            <div style={{ position: "absolute", bottom: -22, [isSent ? "right" : "left"]: 4, display: "flex", gap: 3, flexWrap: "wrap" }}>
+                              {Object.entries(msg.reactions!).map(([emoji, userIds]) => (
+                                <div key={emoji} onClick={() => toggleReaction(msg.id, emoji)} style={{ padding: "2px 7px", background: userIds.includes(user.id) ? "rgba(26,111,255,0.35)" : "rgba(30,36,55,0.95)", border: userIds.includes(user.id) ? "1px solid rgba(26,111,255,0.5)" : "1px solid rgba(255,255,255,0.15)", borderRadius: 999, fontSize: 12, cursor: "pointer", display: "flex", alignItems: "center", gap: 3, boxShadow: "0 2px 8px rgba(0,0,0,0.3)" }}>
+                                  {emoji}<span style={{ fontSize: 10, color: "rgba(255,255,255,0.7)" }}>{userIds.length}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          {/* Reaction picker for this message */}
+                          {reactionPickerMsgId === msg.id && (
+                            <div onClick={e => e.stopPropagation()} style={{ position: "absolute", [isSent ? "right" : "left"]: 0, bottom: "calc(100% + 8px)", background: "#1a2236", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 30, padding: "6px 10px", display: "flex", gap: 4, zIndex: 50, boxShadow: "0 4px 20px rgba(0,0,0,0.4)" }}>
+                              {REACTION_EMOJIS.map(e => (
+                                <button key={e} onClick={() => toggleReaction(msg.id, e)} style={{ fontSize: 20, background: "none", border: "none", cursor: "pointer", padding: "2px", borderRadius: "50%", transition: "transform 0.1s" }}
+                                  onMouseEnter={el => (el.currentTarget.style.transform = "scale(1.3)")}
+                                  onMouseLeave={el => (el.currentTarget.style.transform = "scale(1)")}>
+                                  {e}
+                                </button>
+                              ))}
+                            </div>
+                          )}
                         </div>
-                        <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 3, justifyContent: isSent ? "flex-end" : "flex-start" }}>
-                          <span style={{ fontSize: 11, color: "rgba(255,255,255,0.35)" }}>{time}</span>
-                          {isSent && (msg.is_read ? <CheckCheck size={12} style={{ color: "#60a5fa" }} /> : (msg.is_delivered || onlineUsers.has(activeChat?.userId || "")) ? <CheckCheck size={12} style={{ color: "rgba(255,255,255,0.4)" }} /> : <Check size={12} style={{ color: "rgba(255,255,255,0.4)" }} />)}
-                        </div>
+
+                        {/* React + Reply button for sent messages (right side) */}
+                        {isSent && (
+                          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                            <button className="reply-btn" onClick={() => { setReplyTo(msg); inputRef.current?.focus(); }}
+                              style={{ width: 28, height: 28, borderRadius: "50%", background: "rgba(255,255,255,0.08)", border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                              <CornerUpLeft size={13} style={{ color: "rgba(255,255,255,0.5)" }} />
+                            </button>
+                          </div>
+                        )}
+
+                        {/* Emoji react button on hover (desktop) */}
+                        {hoveredMsgId === msg.id && !msg.id.startsWith("optimistic-") && (
+                          <button onClick={e => { e.stopPropagation(); setReactionPickerMsgId(prev => prev === msg.id ? null : msg.id); }}
+                            style={{ position: "absolute", [isSent ? "left" : "right"]: isSent ? -30 : -30, top: 0, width: 24, height: 24, borderRadius: "50%", background: "rgba(255,255,255,0.1)", border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14 }}>
+                            😊
+                          </button>
+                        )}
                       </div>
                     </div>
                   );
@@ -726,9 +870,45 @@ export default function JugalbandiApp() {
                 <div ref={messagesEndRef} />
               </div>
 
+              {/* Reply Preview */}
+              {replyTo && (
+                <div style={{ padding: "8px 16px", background: "#0f1525", borderTop: "1px solid rgba(255,255,255,0.07)", display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
+                  <div style={{ width: 3, height: 36, background: "#1a6fff", borderRadius: 99, flexShrink: 0 }} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 12, color: "#60a5fa", fontWeight: 600, marginBottom: 2 }}>{replyTo.sender_id === user?.id ? "You" : activeChat.name}</div>
+                    <div style={{ fontSize: 12, color: "rgba(255,255,255,0.5)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{replyTo.file_url ? "📎 File" : replyTo.content}</div>
+                  </div>
+                  <button onClick={() => setReplyTo(null)} style={{ width: 24, height: 24, borderRadius: "50%", background: "rgba(255,255,255,0.08)", border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    <X size={13} style={{ color: "rgba(255,255,255,0.5)" }} />
+                  </button>
+                </div>
+              )}
+
+              {/* Emoji Picker */}
+              {showEmojiPicker && (
+                <div onClick={e => e.stopPropagation()} style={{ padding: "12px", background: "#0f1525", borderTop: "1px solid rgba(255,255,255,0.07)", flexShrink: 0, maxHeight: 200, overflowY: "auto" }}>
+                  <div className="emoji-grid">
+                    {EMOJI_GRID.map(e => (
+                      <button key={e} onClick={() => {
+                        const pos = (inputRef.current?.selectionStart) || message.length;
+                        setMessage(prev => prev.slice(0, pos) + e + prev.slice(pos));
+                        setTimeout(() => { inputRef.current?.focus(); inputRef.current?.setSelectionRange(pos + e.length, pos + e.length); }, 0);
+                      }} style={{ fontSize: 22, background: "none", border: "none", cursor: "pointer", padding: "4px", borderRadius: 8, transition: "background 0.1s" }}
+                        onMouseEnter={el => (el.currentTarget.style.background = "rgba(255,255,255,0.08)")}
+                        onMouseLeave={el => (el.currentTarget.style.background = "none")}>
+                        {e}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Input */}
               <div style={{ padding: "10px 12px", borderTop: "1px solid rgba(255,255,255,0.07)", background: "#0f1525", flexShrink: 0 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 14, padding: "7px 10px" }}>
-                  <Smile size={20} style={{ color: "rgba(255,255,255,0.4)", flexShrink: 0 }} />
+                  <button onClick={e => { e.stopPropagation(); setShowEmojiPicker(p => !p); setReactionPickerMsgId(null); }} style={{ background: "none", border: "none", cursor: "pointer", flexShrink: 0, display: "flex", alignItems: "center", padding: 0 }}>
+                    <Smile size={20} style={{ color: showEmojiPicker ? "#60a5fa" : "rgba(255,255,255,0.4)" }} />
+                  </button>
                   <input ref={inputRef} value={message} onChange={e => {
                     setMessage(e.target.value);
                     if (!user || !activeChat?.userId) return;
