@@ -70,7 +70,9 @@ export default function JugalbandiApp() {
   const [searchResults, setSearchResults] = useState<Profile[]>([]);
   const [searching, setSearching] = useState(false);
   const [onlineUsers, setOnlineUsers] = useState<Set<string>>(new Set());
-  const [chatUserLastSeen, setChatUserLastSeen] = useState<string | null>(null);
+const [chatUserLastSeen, setChatUserLastSeen] = useState<string | null>(null);
+const [typingUsers, setTypingUsers] = useState<Set<string>>(new Set());
+const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -181,6 +183,26 @@ export default function JugalbandiApp() {
       }
     }
   }
+
+  // Typing indicator
+  useEffect(() => {
+    if (!user) return;
+    const typingChannel = supabase.channel("typing-room")
+      .on("broadcast", { event: "typing" }, (payload) => {
+        if (payload.payload.user_id === user.id) return;
+        if (payload.payload.chat_id !== activeChat?.userId && payload.payload.chat_id !== user.id) return;
+        setTypingUsers(prev => new Set(prev).add(payload.payload.user_id));
+        setTimeout(() => {
+          setTypingUsers(prev => {
+            const next = new Set(prev);
+            next.delete(payload.payload.user_id);
+            return next;
+          });
+        }, 3000);
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(typingChannel); };
+  }, [user, activeChat]);
 
   // Presence — online/offline tracking
   useEffect(() => {
@@ -539,9 +561,11 @@ export default function JugalbandiApp() {
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 15, fontWeight: 700, color: "#ffffff" }}>{activeChat.name}</div>
-                  <div style={{ fontSize: 11, color: activeChat.saved ? "#60a5fa" : onlineUsers.has(activeChat.userId || "") ? "#22c55e" : "rgba(255,255,255,0.4)" }}>
+                  <div style={{ fontSize: 11, color: activeChat.saved ? "#60a5fa" : typingUsers.has(activeChat.userId || "") ? "#22c55e" : onlineUsers.has(activeChat.userId || "") ? "#22c55e" : "rgba(255,255,255,0.4)" }}>
                     {activeChat.saved
                       ? "Your personal space"
+                      : typingUsers.has(activeChat.userId || "")
+                      ? "typing..."
                       : onlineUsers.has(activeChat.userId || "")
                       ? "● Online"
                       : chatUserLastSeen
@@ -612,7 +636,15 @@ export default function JugalbandiApp() {
               <div style={{ padding: "10px 12px", borderTop: "1px solid rgba(255,255,255,0.07)", background: "#0f1525", flexShrink: 0 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 14, padding: "7px 10px" }}>
                   <Smile size={20} style={{ color: "rgba(255,255,255,0.4)", cursor: "pointer", flexShrink: 0 }} />
-                  <input ref={inputRef} value={message} onChange={e => setMessage(e.target.value)}
+                  <input ref={inputRef} value={message} onChange={e => {
+                      setMessage(e.target.value);
+                      if (!user || !activeChat?.userId) return;
+                      supabase.channel("typing-room").send({
+                        type: "broadcast",
+                        event: "typing",
+                        payload: { user_id: user.id, chat_id: activeChat.userId },
+                      });
+                    }}
                     onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
                     placeholder={activeChat.saved ? "Write a note to yourself..." : `Message ${activeChat.name}...`}
                     style={{ flex: 1, background: "transparent", border: "none", color: "#ffffff", fontSize: 14, padding: "3px 0", minWidth: 0 }} />
