@@ -86,8 +86,6 @@ export default function JugalbandiApp() {
   }
 
   async function fetchConversations(userId: string) {
-  // Mark all received messages as delivered
-  
   const { data } = await supabase
     .from("messages")
     .select("*, sender:profiles!messages_sender_id_fkey(id,full_name,username), receiver:profiles!messages_receiver_id_fkey(id,full_name,username)")
@@ -95,6 +93,12 @@ export default function JugalbandiApp() {
     .order("created_at", { ascending: false });
 
   if (!data) return;
+
+  // Mark each undelivered message individually so realtime broadcasts to sender
+  const undelivered = data.filter(m => m.receiver_id === userId && !m.is_delivered);
+  for (const m of undelivered) {
+    await supabase.from("messages").update({ is_delivered: true }).eq("id", m.id);
+  }
 
   const seen = new Set<string>();
   const convs: Conversation[] = [];
