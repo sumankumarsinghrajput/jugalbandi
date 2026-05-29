@@ -431,6 +431,23 @@ const [lightboxImg, setLightboxImg] = useState<string | null>(null);
     setSending(false);
   }
 
+  async function downloadFile(url: string, filename: string) {
+    try {
+      const response = await fetch(url);
+      const blob = await response.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.download = filename || "download";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(blobUrl);
+    } catch {
+      alert("Download failed. Please try again.");
+    }
+  }
+
   function renderFileMessage(msg: Message) {
     const isImage = msg.file_type?.startsWith("image/");
     const isVideo = msg.file_type?.startsWith("video/");
@@ -464,8 +481,7 @@ const [lightboxImg, setLightboxImg] = useState<string | null>(null);
     }
 
     return (
-      <a href={msg.file_url} download={msg.file_name} style={{ textDecoration: "none" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: "rgba(255,255,255,0.08)", borderRadius: 10, cursor: "pointer" }}>
+      <div onClick={() => downloadFile(msg.file_url!, msg.file_name || "file")} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: "rgba(255,255,255,0.08)", borderRadius: 10, cursor: "pointer" }}>
           <div style={{ color: "#60a5fa", flexShrink: 0 }}>{getFileIcon(msg.file_type || "")}</div>
           <div style={{ minWidth: 0 }}>
             <div style={{ fontSize: 13, fontWeight: 600, color: "#fff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 180 }}>{msg.file_name}</div>
@@ -473,7 +489,6 @@ const [lightboxImg, setLightboxImg] = useState<string | null>(null);
           </div>
           <Download size={16} style={{ color: "#60a5fa", flexShrink: 0 }} />
         </div>
-      </a>
     );
   }
 
@@ -569,9 +584,9 @@ const [lightboxImg, setLightboxImg] = useState<string | null>(null);
   <div onClick={() => setLightboxImg(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.92)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", cursor: "zoom-out" }}>
     <button onClick={() => setLightboxImg(null)} style={{ position: "absolute", top: 16, right: 16, background: "rgba(255,255,255,0.1)", border: "none", borderRadius: "50%", width: 40, height: 40, color: "#fff", fontSize: 20, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button>
     <img src={lightboxImg} style={{ maxWidth: "95vw", maxHeight: "90vh", borderRadius: 12, objectFit: "contain" }} onClick={e => e.stopPropagation()} />
-    <a href={lightboxImg} download style={{ position: "absolute", bottom: 20, left: "50%", transform: "translateX(-50%)", padding: "8px 20px", background: "rgba(26,111,255,0.8)", borderRadius: 10, color: "#fff", fontSize: 13, textDecoration: "none", display: "flex", alignItems: "center", gap: 6 }}>
-      <Download size={14} /> Download
-    </a>
+    <button onClick={() => downloadFile(lightboxImg!, lightboxImg!.split("/").pop() || "image")} style={{ position: "absolute", bottom: 20, left: "50%", transform: "translateX(-50%)", padding: "8px 20px", background: "rgba(26,111,255,0.8)", borderRadius: 10, color: "#fff", fontSize: 13, border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+        <Download size={14} /> Download
+      </button>
   </div>
 )}
 
