@@ -74,6 +74,37 @@ const [chatUserLastSeen, setChatUserLastSeen] = useState<string | null>(null);
 const messagesEndRef = useRef<HTMLDivElement>(null);
 const inputRef = useRef<HTMLInputElement>(null);
 
+  // AUTH - must be first
+  useEffect(() => {
+    let interval: ReturnType<typeof setInterval>;
+
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!session) { window.location.href = "/auth"; return; }
+      setUser(session.user);
+      setLoading(false);
+
+      supabase.from("profiles").select("*").eq("id", session.user.id).single()
+        .then(({ data }) => { if (data) setProfile(data); });
+
+      const updateLastSeen = () => {
+        supabase.from("profiles")
+          .update({ last_seen: new Date().toISOString() })
+          .eq("id", session.user.id)
+          .then(() => {});
+      };
+
+      updateLastSeen();
+      interval = setInterval(updateLastSeen, 30000);
+      window.addEventListener("beforeunload", updateLastSeen);
+    }).catch(() => { window.location.href = "/auth"; });
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener("beforeunload", updateLastSeen);
+    };
+  }, []);
+
+  // Fetch messages and last seen when chat opens
   useEffect(() => {
     if (activeChat && user) {
       fetchMessages(user.id, activeChat.saved ? "saved" : activeChat.userId!);
