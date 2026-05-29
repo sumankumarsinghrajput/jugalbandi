@@ -684,3 +684,7 @@ const inputRef = useRef<HTMLInputElement>(null);
     </>
   );
 }
+
+function updateLastSeen(this: Window, ev: BeforeUnloadEvent) {
+  throw new Error("Function not implemented.");
+}
