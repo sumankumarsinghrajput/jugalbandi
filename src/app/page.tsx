@@ -87,11 +87,7 @@ export default function JugalbandiApp() {
 
   async function fetchConversations(userId: string) {
   // Mark all received messages as delivered
-  await supabase.from("messages")
-    .update({ is_delivered: true })
-    .eq("receiver_id", userId)
-    .eq("is_delivered", false);
-
+  
   const { data } = await supabase
     .from("messages")
     .select("*, sender:profiles!messages_sender_id_fkey(id,full_name,username), receiver:profiles!messages_receiver_id_fkey(id,full_name,username)")
@@ -151,9 +147,17 @@ export default function JugalbandiApp() {
         .from("messages").select("*")
         .or(`and(sender_id.eq.${userId},receiver_id.eq.${otherId}),and(sender_id.eq.${otherId},receiver_id.eq.${userId})`)
         .order("created_at", { ascending: true }).limit(100);
-      if (data) setMessages(data);
-      await supabase.from("messages").update({ is_read: true })
-        .eq("sender_id", otherId).eq("receiver_id", userId).eq("is_read", false);
+      if (data) {
+        setMessages(data);
+        const undelivered = data.filter(m => m.receiver_id === userId && !m.is_delivered);
+        for (const m of undelivered) {
+          await supabase.from("messages").update({ is_delivered: true }).eq("id", m.id);
+        }
+        const unread = data.filter(m => m.receiver_id === userId && !m.is_read);
+        for (const m of unread) {
+          await supabase.from("messages").update({ is_read: true }).eq("id", m.id);
+        }
+      }
     }
   }
 
