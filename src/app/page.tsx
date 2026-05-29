@@ -545,7 +545,9 @@ export default function JugalbandiApp() {
                       : onlineUsers.has(activeChat.userId || "")
                       ? "● Online"
                       : chatUserLastSeen
-                      ? `Last seen ${timeAgo(chatUserLastSeen)} ago`
+                      ? timeAgo(chatUserLastSeen) === "recently"
+                        ? "Last seen recently"
+                        : `Last seen ${timeAgo(chatUserLastSeen)} ago`
                       : `@${activeChat.username}`}
                   </div>
                 </div>
