@@ -87,7 +87,8 @@ export default function JugalbandiApp() {
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
+const [uploadProgress, setUploadProgress] = useState(0);
+const [lightboxImg, setLightboxImg] = useState<string | null>(null);
   const [showChat, setShowChat] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [userSearch, setUserSearch] = useState("");
@@ -437,13 +438,12 @@ export default function JugalbandiApp() {
 
     if (isImage) {
       return (
-        <a href={msg.file_url} target="_blank" rel="noopener noreferrer">
-          <img
-            src={msg.file_url}
-            alt={msg.file_name}
-            style={{ maxWidth: "100%", maxHeight: 260, borderRadius: 10, display: "block", cursor: "pointer" }}
-          />
-        </a>
+        <img
+          src={msg.file_url}
+          alt={msg.file_name}
+          onClick={() => setLightboxImg(msg.file_url!)}
+          style={{ maxWidth: "100%", maxHeight: 260, borderRadius: 10, display: "block", cursor: "zoom-in" }}
+        />
       );
     }
 
@@ -464,7 +464,7 @@ export default function JugalbandiApp() {
     }
 
     return (
-      <a href={msg.file_url} target="_blank" rel="noopener noreferrer" style={{ textDecoration: "none" }}>
+      <a href={msg.file_url} download={msg.file_name} style={{ textDecoration: "none" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: "rgba(255,255,255,0.08)", borderRadius: 10, cursor: "pointer" }}>
           <div style={{ color: "#60a5fa", flexShrink: 0 }}>{getFileIcon(msg.file_type || "")}</div>
           <div style={{ minWidth: 0 }}>
@@ -564,6 +564,17 @@ export default function JugalbandiApp() {
       `}</style>
 
       <div className="app">
+        {/* Lightbox */}
+{lightboxImg && (
+  <div onClick={() => setLightboxImg(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.92)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", cursor: "zoom-out" }}>
+    <button onClick={() => setLightboxImg(null)} style={{ position: "absolute", top: 16, right: 16, background: "rgba(255,255,255,0.1)", border: "none", borderRadius: "50%", width: 40, height: 40, color: "#fff", fontSize: 20, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button>
+    <img src={lightboxImg} style={{ maxWidth: "95vw", maxHeight: "90vh", borderRadius: 12, objectFit: "contain" }} onClick={e => e.stopPropagation()} />
+    <a href={lightboxImg} download style={{ position: "absolute", bottom: 20, left: "50%", transform: "translateX(-50%)", padding: "8px 20px", background: "rgba(26,111,255,0.8)", borderRadius: 10, color: "#fff", fontSize: 13, textDecoration: "none", display: "flex", alignItems: "center", gap: 6 }}>
+      <Download size={14} /> Download
+    </a>
+  </div>
+)}
+
         {/* SIDEBAR */}
         <div className={`sidebar${showChat ? " slide-out" : ""}`} style={{ position: "relative" }}>
           {showSearch && (
