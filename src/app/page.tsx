@@ -68,8 +68,9 @@ export default function JugalbandiApp() {
   const [userSearch, setUserSearch] = useState("");
   const [searchResults, setSearchResults] = useState<Profile[]>([]);
   const [searching, setSearching] = useState(false);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+const [onlineUsers, setOnlineUsers] = useState<Set<string>>(new Set());
+const messagesEndRef = useRef<HTMLDivElement>(null);
+const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -164,6 +165,25 @@ export default function JugalbandiApp() {
       }
     }
   }
+
+  useEffect(() => {
+    if (!user) return;
+    const presenceChannel = supabase.channel("presence-room")
+      .on("presence", { event: "sync" }, () => {
+        const state = presenceChannel.presenceState<{ user_id: string }>();
+        const online = new Set<string>();
+        Object.values(state).forEach((presences: any) => {
+          presences.forEach((p: any) => online.add(p.user_id));
+        });
+        setOnlineUsers(online);
+      })
+      .subscribe(async (status) => {
+        if (status === "SUBSCRIBED") {
+          await presenceChannel.track({ user_id: user.id });
+        }
+      });
+    return () => { supabase.removeChannel(presenceChannel); };
+  }, [user]);
 
   useEffect(() => {
     if (!user) return;
@@ -548,7 +568,7 @@ export default function JugalbandiApp() {
                           {isSent && (
   msg.is_read
     ? <CheckCheck size={12} style={{ color: "#60a5fa" }} />
-    : msg.is_delivered
+    : onlineUsers.has(activeChat?.userId || "")
     ? <CheckCheck size={12} style={{ color: "rgba(255,255,255,0.4)" }} />
     : <Check size={12} style={{ color: "rgba(255,255,255,0.4)" }} />
 )}
