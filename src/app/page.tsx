@@ -69,14 +69,15 @@ export default function JugalbandiApp() {
   const [userSearch, setUserSearch] = useState("");
   const [searchResults, setSearchResults] = useState<Profile[]>([]);
   const [searching, setSearching] = useState(false);
-const [onlineUsers, setOnlineUsers] = useState<Set<string>>(new Set());
-const [chatUserLastSeen, setChatUserLastSeen] = useState<string | null>(null);
-const messagesEndRef = useRef<HTMLDivElement>(null);
-const inputRef = useRef<HTMLInputElement>(null);
+  const [onlineUsers, setOnlineUsers] = useState<Set<string>>(new Set());
+  const [chatUserLastSeen, setChatUserLastSeen] = useState<string | null>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
-  // AUTH - must be first
+  // AUTH
   useEffect(() => {
     let interval: ReturnType<typeof setInterval>;
+    let lastSeenFn: (() => void) | null = null;
 
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (!session) { window.location.href = "/auth"; return; }
@@ -86,21 +87,21 @@ const inputRef = useRef<HTMLInputElement>(null);
       supabase.from("profiles").select("*").eq("id", session.user.id).single()
         .then(({ data }) => { if (data) setProfile(data); });
 
-      const updateLastSeen = () => {
+      lastSeenFn = () => {
         supabase.from("profiles")
           .update({ last_seen: new Date().toISOString() })
           .eq("id", session.user.id)
           .then(() => {});
       };
 
-      updateLastSeen();
-      interval = setInterval(updateLastSeen, 30000);
-      window.addEventListener("beforeunload", updateLastSeen);
+      lastSeenFn();
+      interval = setInterval(lastSeenFn, 30000);
+      window.addEventListener("beforeunload", lastSeenFn);
     }).catch(() => { window.location.href = "/auth"; });
 
     return () => {
       clearInterval(interval);
-      window.removeEventListener("beforeunload", updateLastSeen);
+      if (lastSeenFn) window.removeEventListener("beforeunload", lastSeenFn);
     };
   }, []);
 
@@ -117,75 +118,54 @@ const inputRef = useRef<HTMLInputElement>(null);
     }
   }, [activeChat]);
 
-  async function fetchProfile(userId: string) {
-    const { data } = await supabase.from("profiles").select("*").eq("id", userId).single();
-    if (data) setProfile(data);
-  }
-
   async function fetchConversations(userId: string) {
-  const { data } = await supabase
-    .from("messages")
-    .select("*, sender:profiles!messages_sender_id_fkey(id,full_name,username), receiver:profiles!messages_receiver_id_fkey(id,full_name,username)")
-    .or(`sender_id.eq.${userId},receiver_id.eq.${userId}`)
-    .order("created_at", { ascending: false });
+    const { data } = await supabase
+      .from("messages")
+      .select("*, sender:profiles!messages_sender_id_fkey(id,full_name,username), receiver:profiles!messages_receiver_id_fkey(id,full_name,username)")
+      .or(`sender_id.eq.${userId},receiver_id.eq.${userId}`)
+      .order("created_at", { ascending: false });
 
-  if (!data) return;
+    if (!data) return;
 
-  // Mark each undelivered message individually so realtime broadcasts to sender
-  const undelivered = data.filter(m => m.receiver_id === userId && !m.is_delivered);
-  for (const m of undelivered) {
-    await supabase.from("messages").update({ is_delivered: true }).eq("id", m.id);
-  }
+    const undelivered = data.filter(m => m.receiver_id === userId && !m.is_delivered);
+    for (const m of undelivered) {
+      await supabase.from("messages").update({ is_delivered: true }).eq("id", m.id);
+    }
 
-  const seen = new Set<string>();
-  const convs: Conversation[] = [];
+    const seen = new Set<string>();
+    const convs: Conversation[] = [];
 
-  convs.push({
-    id: "saved",
-    name: "Saved Messages",
-    username: "saved",
-    avatar: "★",
-    color: "#1a6fff",
-    lastMsg: "Your personal notes",
-    time: "",
-    unread: 0,
-    online: true,
-    saved: true,
-  });
-
-  for (const msg of data) {
-    const other = msg.sender_id === userId ? msg.receiver : msg.sender;
-    if (!other || other.id === userId || seen.has(other.id)) continue;
-    seen.add(other.id);
-    const unread = data.filter(m =>
-      m.sender_id === other.id && m.receiver_id === userId && !m.is_read
-    ).length;
     convs.push({
-      id: other.id,
-      name: other.full_name,
-      username: other.username,
-      avatar: getInitials(other.full_name),
-      color: getColor(other.id),
-      lastMsg: msg.content,
-      time: timeAgo(msg.created_at),
-      unread,
-      online: false,
-      userId: other.id,
+      id: "saved", name: "Saved Messages", username: "saved",
+      avatar: "★", color: "#1a6fff", lastMsg: "Your personal notes",
+      time: "", unread: 0, online: true, saved: true,
     });
+
+    for (const msg of data) {
+      const other = msg.sender_id === userId ? msg.receiver : msg.sender;
+      if (!other || other.id === userId || seen.has(other.id)) continue;
+      seen.add(other.id);
+      const unread = data.filter(m =>
+        m.sender_id === other.id && m.receiver_id === userId && !m.is_read
+      ).length;
+      convs.push({
+        id: other.id, name: other.full_name, username: other.username,
+        avatar: getInitials(other.full_name), color: getColor(other.id),
+        lastMsg: msg.content, time: timeAgo(msg.created_at),
+        unread, online: false, userId: other.id,
+      });
+    }
+    setConversations(convs);
   }
-  setConversations(convs);
-}
 
   async function fetchMessages(userId: string, otherId: string) {
     if (otherId === "saved") {
-      const { data } = await supabase
-        .from("messages").select("*")
+      const { data } = await supabase.from("messages").select("*")
         .eq("sender_id", userId).eq("receiver_id", userId)
         .order("created_at", { ascending: true }).limit(100);
       if (data) setMessages(data);
     } else {
-      const { data } = await supabase
-        .from("messages").select("*")
+      const { data } = await supabase.from("messages").select("*")
         .or(`and(sender_id.eq.${userId},receiver_id.eq.${otherId}),and(sender_id.eq.${otherId},receiver_id.eq.${userId})`)
         .order("created_at", { ascending: true }).limit(100);
       if (data) {
@@ -202,6 +182,7 @@ const inputRef = useRef<HTMLInputElement>(null);
     }
   }
 
+  // Presence — online/offline tracking
   useEffect(() => {
     if (!user) return;
     const presenceChannel = supabase.channel("presence-room")
@@ -212,22 +193,16 @@ const inputRef = useRef<HTMLInputElement>(null);
           presences.forEach((p: any) => online.add(p.user_id));
         });
         setOnlineUsers(online);
-
-        // When a user comes online, mark their received messages as delivered
-        // both in DB and local state so tick never reverts
         online.forEach(async (onlineUserId) => {
           if (onlineUserId === user.id) return;
-          // Update DB
           await supabase.from("messages")
             .update({ is_delivered: true })
             .eq("sender_id", user.id)
             .eq("receiver_id", onlineUserId)
             .eq("is_delivered", false);
-          // Update local state immediately
           setMessages(prev => prev.map(m =>
             m.sender_id === user.id && m.receiver_id === onlineUserId
-              ? { ...m, is_delivered: true }
-              : m
+              ? { ...m, is_delivered: true } : m
           ));
         });
       })
@@ -239,6 +214,7 @@ const inputRef = useRef<HTMLInputElement>(null);
     return () => { supabase.removeChannel(presenceChannel); };
   }, [user]);
 
+  // Realtime messages
   useEffect(() => {
     if (!user) return;
     fetchConversations(user.id);
@@ -276,18 +252,12 @@ const inputRef = useRef<HTMLInputElement>(null);
         const updated = payload.new as Message;
         if (updated.sender_id !== user.id && updated.receiver_id !== user.id) return;
         setMessages(prev =>
-  prev.map(m => m.id === updated.id ? { ...m, is_read: updated.is_read, is_delivered: updated.is_delivered } : m)
-);
+          prev.map(m => m.id === updated.id ? { ...m, is_read: updated.is_read, is_delivered: updated.is_delivered } : m)
+        );
       })
       .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [user]);
-
-  useEffect(() => {
-    if (activeChat && user) {
-      fetchMessages(user.id, activeChat.saved ? "saved" : activeChat.userId!);
-    }
-  }, [activeChat]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -314,13 +284,10 @@ const inputRef = useRef<HTMLInputElement>(null);
     setMessage("");
     const receiverId = activeChat.saved ? user.id : activeChat.userId!;
     const optimisticMsg: Message = {
-      id: "optimistic-" + Date.now(),
-      content,
-      sender_id: user.id,
-      receiver_id: receiverId,
+      id: "optimistic-" + Date.now(), content,
+      sender_id: user.id, receiver_id: receiverId,
       created_at: new Date().toISOString(),
-      is_read: false,
-      is_delivered: false,
+      is_read: false, is_delivered: false,
     };
     setMessages(prev => [...prev, optimisticMsg]);
     const { data, error } = await supabase.from("messages")
@@ -421,7 +388,6 @@ const inputRef = useRef<HTMLInputElement>(null);
         {/* SIDEBAR */}
         <div className={`sidebar${showChat ? " slide-out" : ""}`} style={{ position: "relative" }}>
 
-          {/* User search overlay */}
           {showSearch && (
             <div className="search-overlay">
               <div style={{ padding: "14px 16px", borderBottom: "1px solid rgba(255,255,255,0.07)", display: "flex", alignItems: "center", gap: 10 }}>
@@ -463,7 +429,6 @@ const inputRef = useRef<HTMLInputElement>(null);
             </div>
           )}
 
-          {/* Header */}
           <div style={{ padding: "14px 16px 12px", borderBottom: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -476,7 +441,6 @@ const inputRef = useRef<HTMLInputElement>(null);
               </div>
             </div>
 
-            {/* Profile chip */}
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, padding: "8px 12px", background: "rgba(26,111,255,0.09)", borderRadius: 10, border: "1px solid rgba(26,111,255,0.18)" }}>
               <div style={{ width: 30, height: 30, borderRadius: "50%", background: "linear-gradient(135deg, #1a6fff, #7c3aed)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: "#fff", flexShrink: 0 }}>{myInitials}</div>
               <div style={{ flex: 1, minWidth: 0 }}>
@@ -486,7 +450,6 @@ const inputRef = useRef<HTMLInputElement>(null);
               <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#22c55e", flexShrink: 0 }} />
             </div>
 
-            {/* Search */}
             <div style={{ position: "relative" }}>
               <Search size={14} style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", color: "rgba(255,255,255,0.35)", pointerEvents: "none" }} />
               <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search conversations..."
@@ -494,7 +457,6 @@ const inputRef = useRef<HTMLInputElement>(null);
             </div>
           </div>
 
-          {/* Tabs */}
           <div style={{ display: "flex", padding: "8px 12px", gap: 6, borderBottom: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
             {["all", "unread", "groups"].map(tab => (
               <button key={tab} onClick={() => setActiveTab(tab)} style={{ flex: 1, padding: "7px 4px", borderRadius: 8, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 600, background: activeTab === tab ? "rgba(26,111,255,0.22)" : "rgba(255,255,255,0.04)", color: activeTab === tab ? "#60a5fa" : "rgba(255,255,255,0.45)", textTransform: "capitalize", transition: "all 0.2s" }}>
@@ -503,7 +465,6 @@ const inputRef = useRef<HTMLInputElement>(null);
             ))}
           </div>
 
-          {/* Conversation list */}
           <div style={{ flex: 1, overflowY: "auto" }}>
             {filteredConvs.length === 0 && (
               <div style={{ padding: "32px 20px", textAlign: "center" }}>
@@ -522,7 +483,9 @@ const inputRef = useRef<HTMLInputElement>(null);
                   <div style={{ width: 46, height: 46, borderRadius: "50%", background: chat.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: chat.saved ? 18 : 13, fontWeight: 700, color: "#fff" }}>
                     {chat.avatar}
                   </div>
-                  {chat.online && <div style={{ position: "absolute", bottom: 1, right: 1, width: 11, height: 11, background: "#22c55e", borderRadius: "50%", border: "2px solid #0f1525" }} />}
+                  {onlineUsers.has(chat.userId || "") && (
+                    <div style={{ position: "absolute", bottom: 1, right: 1, width: 11, height: 11, background: "#22c55e", borderRadius: "50%", border: "2px solid #0f1525" }} />
+                  )}
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
@@ -538,7 +501,6 @@ const inputRef = useRef<HTMLInputElement>(null);
             ))}
           </div>
 
-          {/* Bottom nav */}
           <div style={{ padding: "10px 14px", borderTop: "1px solid rgba(255,255,255,0.07)", display: "flex", gap: 4, flexShrink: 0 }}>
             {[
               { icon: <Edit size={16} />, active: true },
@@ -560,14 +522,15 @@ const inputRef = useRef<HTMLInputElement>(null);
         <div className={`chat-area${!showChat ? " slide-out" : ""}`} style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
           {activeChat ? (
             <>
-              {/* Header */}
               <div style={{ padding: "10px 14px", borderBottom: "1px solid rgba(255,255,255,0.07)", display: "flex", alignItems: "center", gap: 10, background: "#0f1525", flexShrink: 0 }}>
                 <button className="icon-btn" onClick={backToList}><ArrowLeft size={17} /></button>
                 <div style={{ position: "relative" }}>
                   <div style={{ width: 38, height: 38, borderRadius: "50%", background: activeChat.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: activeChat.saved ? 16 : 13, fontWeight: 700, color: "#fff" }}>
                     {activeChat.avatar}
                   </div>
-                  {activeChat.online && <div style={{ position: "absolute", bottom: 0, right: 0, width: 9, height: 9, background: "#22c55e", borderRadius: "50%", border: "2px solid #0f1525" }} />}
+                  {onlineUsers.has(activeChat.userId || "") && (
+                    <div style={{ position: "absolute", bottom: 0, right: 0, width: 9, height: 9, background: "#22c55e", borderRadius: "50%", border: "2px solid #0f1525" }} />
+                  )}
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 15, fontWeight: 700, color: "#ffffff" }}>{activeChat.name}</div>
@@ -592,7 +555,6 @@ const inputRef = useRef<HTMLInputElement>(null);
                 </div>
               </div>
 
-              {/* Messages */}
               <div style={{ flex: 1, overflowY: "auto", padding: "16px 16px 8px", display: "flex", flexDirection: "column", gap: 6 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "4px 0 10px" }}>
                   <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.06)" }} />
@@ -626,12 +588,12 @@ const inputRef = useRef<HTMLInputElement>(null);
                         <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 3, justifyContent: isSent ? "flex-end" : "flex-start" }}>
                           <span style={{ fontSize: 11, color: "rgba(255,255,255,0.35)" }}>{time}</span>
                           {isSent && (
-  msg.is_read
-    ? <CheckCheck size={12} style={{ color: "#60a5fa" }} />
-    : (msg.is_delivered || onlineUsers.has(activeChat?.userId || ""))
-    ? <CheckCheck size={12} style={{ color: "rgba(255,255,255,0.4)" }} />
-    : <Check size={12} style={{ color: "rgba(255,255,255,0.4)" }} />
-)}
+                            msg.is_read
+                              ? <CheckCheck size={12} style={{ color: "#60a5fa" }} />
+                              : (msg.is_delivered || onlineUsers.has(activeChat?.userId || ""))
+                              ? <CheckCheck size={12} style={{ color: "rgba(255,255,255,0.4)" }} />
+                              : <Check size={12} style={{ color: "rgba(255,255,255,0.4)" }} />
+                          )}
                         </div>
                       </div>
                     </div>
@@ -640,7 +602,6 @@ const inputRef = useRef<HTMLInputElement>(null);
                 <div ref={messagesEndRef} />
               </div>
 
-              {/* Input */}
               <div style={{ padding: "10px 12px", borderTop: "1px solid rgba(255,255,255,0.07)", background: "#0f1525", flexShrink: 0 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 14, padding: "7px 10px" }}>
                   <Smile size={20} style={{ color: "rgba(255,255,255,0.4)", cursor: "pointer", flexShrink: 0 }} />
@@ -683,8 +644,4 @@ const inputRef = useRef<HTMLInputElement>(null);
       </div>
     </>
   );
-}
-
-function updateLastSeen(this: Window, ev: BeforeUnloadEvent) {
-  throw new Error("Function not implemented.");
 }
