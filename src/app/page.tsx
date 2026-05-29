@@ -431,43 +431,14 @@ const [lightboxImg, setLightboxImg] = useState<string | null>(null);
     setSending(false);
   }
 
-  async function downloadFile(url: string, filename: string) {
-    try {
-      // Add fl_attachment to Cloudinary URL — forces browser to download not navigate
-      let downloadUrl = url;
-      if (url.includes("cloudinary.com") && url.includes("/upload/")) {
-        downloadUrl = url.replace("/upload/", "/upload/fl_attachment/");
-      }
-
-      const response = await fetch(downloadUrl, { mode: "cors" });
-      if (response.ok) {
-        const blob = await response.blob();
-        const blobUrl = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = blobUrl;
-        a.download = filename || "download";
-        document.body.appendChild(a);
-        a.click();
-        setTimeout(() => {
-          document.body.removeChild(a);
-          URL.revokeObjectURL(blobUrl);
-        }, 200);
-      } else {
-        window.open(downloadUrl, "_blank");
-      }
-    } catch {
-      // Fallback for PWA
-      const downloadUrl = url.includes("cloudinary.com") && url.includes("/upload/")
-        ? url.replace("/upload/", "/upload/fl_attachment/")
-        : url;
-      const a = document.createElement("a");
-      a.href = downloadUrl;
-      a.download = filename || "download";
-      a.target = "_blank";
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-    }
+  function downloadFile(url: string, filename: string) {
+    const proxyUrl = `/api/download?url=${encodeURIComponent(url)}&filename=${encodeURIComponent(filename || "download")}`;
+    const a = document.createElement("a");
+    a.href = proxyUrl;
+    a.download = filename || "download";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
   }
 
   function renderFileMessage(msg: Message) {
