@@ -6,6 +6,7 @@ import {
   Smile, Paperclip, Mic, Send, MoreVertical,
   Users, Hash, Star, Zap,
   Check, CheckCheck, Shield, LogOut, ArrowLeft, UserPlus, X,
+  FileText, Film, Music, Archive, Download, Image,
 } from "lucide-react";
 
 type Message = {
@@ -16,6 +17,10 @@ type Message = {
   created_at: string;
   is_read: boolean;
   is_delivered: boolean;
+  file_url?: string;
+  file_type?: string;
+  file_name?: string;
+  file_size?: number;
 };
 
 type Profile = {
@@ -53,6 +58,23 @@ const timeAgo = (date: string) => {
   return `${Math.floor(h / 24)} day${Math.floor(h / 24) > 1 ? "s" : ""}`;
 };
 
+const formatFileSize = (bytes: number) => {
+  if (bytes < 1024) return bytes + " B";
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+  return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+};
+
+const getFileIcon = (type: string) => {
+  if (type.startsWith("image/")) return <Image size={20} />;
+  if (type.startsWith("video/")) return <Film size={20} />;
+  if (type.startsWith("audio/")) return <Music size={20} />;
+  if (type.includes("pdf") || type.includes("document") || type.includes("text")) return <FileText size={20} />;
+  return <Archive size={20} />;
+};
+
+const CLOUD_NAME = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME;
+const UPLOAD_PRESET = process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET;
+
 export default function JugalbandiApp() {
   const [user, setUser] = useState<any>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -64,17 +86,20 @@ export default function JugalbandiApp() {
   const [activeChat, setActiveChat] = useState<Conversation | null>(null);
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
   const [showChat, setShowChat] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [userSearch, setUserSearch] = useState("");
   const [searchResults, setSearchResults] = useState<Profile[]>([]);
   const [searching, setSearching] = useState(false);
   const [onlineUsers, setOnlineUsers] = useState<Set<string>>(new Set());
-const [chatUserLastSeen, setChatUserLastSeen] = useState<string | null>(null);
-const [typingUsers, setTypingUsers] = useState<Set<string>>(new Set());
-const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [chatUserLastSeen, setChatUserLastSeen] = useState<string | null>(null);
+  const [typingUsers, setTypingUsers] = useState<Set<string>>(new Set());
+  const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // AUTH
   useEffect(() => {
@@ -153,7 +178,8 @@ const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
       convs.push({
         id: other.id, name: other.full_name, username: other.username,
         avatar: getInitials(other.full_name), color: getColor(other.id),
-        lastMsg: msg.content, time: timeAgo(msg.created_at),
+        lastMsg: msg.file_url ? `📎 ${msg.file_name || "File"}` : msg.content,
+        time: timeAgo(msg.created_at),
         unread, online: false, userId: other.id,
       });
     }
@@ -204,7 +230,7 @@ const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     return () => { supabase.removeChannel(typingChannel); };
   }, [user, activeChat]);
 
-  // Presence — online/offline tracking
+  // Presence
   useEffect(() => {
     if (!user) return;
     const presenceChannel = supabase.channel("presence-room")
@@ -299,6 +325,86 @@ const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     return () => clearTimeout(timer);
   }, [userSearch, user]);
 
+  // Upload file to Cloudinary
+  async function uploadFile(file: File) {
+    if (!CLOUD_NAME || !UPLOAD_PRESET) {
+      alert("Cloudinary not configured.");
+      return null;
+    }
+    setUploading(true);
+    setUploadProgress(0);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("upload_preset", UPLOAD_PRESET);
+
+      const response = await fetch(
+        `https://api.cloudinary.com/v1_1/${CLOUD_NAME}/auto/upload`,
+        { method: "POST", body: formData }
+      );
+      const data = await response.json();
+      setUploading(false);
+      return {
+        url: data.secure_url,
+        type: file.type,
+        name: file.name,
+        size: file.size,
+      };
+    } catch {
+      setUploading(false);
+      alert("Upload failed. Try again.");
+      return null;
+    }
+  }
+
+  async function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file || !user || !activeChat) return;
+    if (file.size > 50 * 1024 * 1024) {
+      alert("File too large. Maximum size is 50MB.");
+      return;
+    }
+
+    const uploaded = await uploadFile(file);
+    if (!uploaded) return;
+
+    const receiverId = activeChat.saved ? user.id : activeChat.userId!;
+    const optimisticMsg: Message = {
+      id: "optimistic-" + Date.now(),
+      content: "",
+      sender_id: user.id,
+      receiver_id: receiverId,
+      created_at: new Date().toISOString(),
+      is_read: false,
+      is_delivered: false,
+      file_url: uploaded.url,
+      file_type: uploaded.type,
+      file_name: uploaded.name,
+      file_size: uploaded.size,
+    };
+    setMessages(prev => [...prev, optimisticMsg]);
+
+    const { data, error } = await supabase.from("messages")
+      .insert({
+        sender_id: user.id,
+        receiver_id: receiverId,
+        content: "",
+        file_url: uploaded.url,
+        file_type: uploaded.type,
+        file_name: uploaded.name,
+        file_size: uploaded.size,
+      })
+      .select().single();
+
+    if (error) {
+      setMessages(prev => prev.filter(m => m.id !== optimisticMsg.id));
+    } else if (data) {
+      setMessages(prev => prev.map(m => m.id === optimisticMsg.id ? data : m));
+      fetchConversations(user.id);
+    }
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }
+
   async function sendMessage() {
     if (!message.trim() || !user || sending || !activeChat) return;
     setSending(true);
@@ -322,6 +428,53 @@ const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
       fetchConversations(user.id);
     }
     setSending(false);
+  }
+
+  function renderFileMessage(msg: Message) {
+    const isImage = msg.file_type?.startsWith("image/");
+    const isVideo = msg.file_type?.startsWith("video/");
+    const isAudio = msg.file_type?.startsWith("audio/");
+
+    if (isImage) {
+      return (
+        <a href={msg.file_url} target="_blank" rel="noopener noreferrer">
+          <img
+            src={msg.file_url}
+            alt={msg.file_name}
+            style={{ maxWidth: "100%", maxHeight: 260, borderRadius: 10, display: "block", cursor: "pointer" }}
+          />
+        </a>
+      );
+    }
+
+    if (isVideo) {
+      return (
+        <video controls style={{ maxWidth: "100%", maxHeight: 260, borderRadius: 10, display: "block" }}>
+          <source src={msg.file_url} type={msg.file_type} />
+        </video>
+      );
+    }
+
+    if (isAudio) {
+      return (
+        <audio controls style={{ width: "100%", marginTop: 4 }}>
+          <source src={msg.file_url} type={msg.file_type} />
+        </audio>
+      );
+    }
+
+    return (
+      <a href={msg.file_url} target="_blank" rel="noopener noreferrer" style={{ textDecoration: "none" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: "rgba(255,255,255,0.08)", borderRadius: 10, cursor: "pointer" }}>
+          <div style={{ color: "#60a5fa", flexShrink: 0 }}>{getFileIcon(msg.file_type || "")}</div>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "#fff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 180 }}>{msg.file_name}</div>
+            <div style={{ fontSize: 11, color: "rgba(255,255,255,0.5)" }}>{formatFileSize(msg.file_size || 0)}</div>
+          </div>
+          <Download size={16} style={{ color: "#60a5fa", flexShrink: 0 }} />
+        </div>
+      </a>
+    );
   }
 
   function openUserChat(p: Profile) {
@@ -411,10 +564,8 @@ const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
       `}</style>
 
       <div className="app">
-
         {/* SIDEBAR */}
         <div className={`sidebar${showChat ? " slide-out" : ""}`} style={{ position: "relative" }}>
-
           {showSearch && (
             <div className="search-overlay">
               <div style={{ padding: "14px 16px", borderBottom: "1px solid rgba(255,255,255,0.07)", display: "flex", alignItems: "center", gap: 10 }}>
@@ -467,7 +618,6 @@ const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
                 <button className="icon-btn" onClick={handleLogout} style={{ color: "rgba(255,100,100,0.8)" }}><LogOut size={15} /></button>
               </div>
             </div>
-
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, padding: "8px 12px", background: "rgba(26,111,255,0.09)", borderRadius: 10, border: "1px solid rgba(26,111,255,0.18)" }}>
               <div style={{ width: 30, height: 30, borderRadius: "50%", background: "linear-gradient(135deg, #1a6fff, #7c3aed)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: "#fff", flexShrink: 0 }}>{myInitials}</div>
               <div style={{ flex: 1, minWidth: 0 }}>
@@ -476,7 +626,6 @@ const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
               </div>
               <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#22c55e", flexShrink: 0 }} />
             </div>
-
             <div style={{ position: "relative" }}>
               <Search size={14} style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", color: "rgba(255,255,255,0.35)", pointerEvents: "none" }} />
               <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search conversations..."
@@ -562,16 +711,11 @@ const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 15, fontWeight: 700, color: "#ffffff" }}>{activeChat.name}</div>
                   <div style={{ fontSize: 11, color: activeChat.saved ? "#60a5fa" : typingUsers.has(activeChat.userId || "") ? "#22c55e" : onlineUsers.has(activeChat.userId || "") ? "#22c55e" : "rgba(255,255,255,0.4)" }}>
-                    {activeChat.saved
-                      ? "Your personal space"
-                      : typingUsers.has(activeChat.userId || "")
-                      ? "typing..."
-                      : onlineUsers.has(activeChat.userId || "")
-                      ? "● Online"
+                    {activeChat.saved ? "Your personal space"
+                      : typingUsers.has(activeChat.userId || "") ? "typing..."
+                      : onlineUsers.has(activeChat.userId || "") ? "● Online"
                       : chatUserLastSeen
-                      ? timeAgo(chatUserLastSeen) === "recently"
-                        ? "Last seen recently"
-                        : `Last seen ${timeAgo(chatUserLastSeen)} ago`
+                      ? timeAgo(chatUserLastSeen) === "recently" ? "Last seen recently" : `Last seen ${timeAgo(chatUserLastSeen)} ago`
                       : `@${activeChat.username}`}
                   </div>
                 </div>
@@ -585,6 +729,16 @@ const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
                   <button className="icon-btn"><MoreVertical size={15} /></button>
                 </div>
               </div>
+
+              {/* Upload progress */}
+              {uploading && (
+                <div style={{ padding: "8px 16px", background: "rgba(26,111,255,0.1)", borderBottom: "1px solid rgba(26,111,255,0.2)", display: "flex", alignItems: "center", gap: 10 }}>
+                  <div style={{ flex: 1, height: 4, background: "rgba(255,255,255,0.1)", borderRadius: 999, overflow: "hidden" }}>
+                    <div style={{ height: "100%", background: "#1a6fff", borderRadius: 999, width: "60%", animation: "shimmer 1s infinite" }} />
+                  </div>
+                  <span style={{ fontSize: 12, color: "#60a5fa" }}>Uploading...</span>
+                </div>
+              )}
 
               <div style={{ flex: 1, overflowY: "auto", padding: "16px 16px 8px", display: "flex", flexDirection: "column", gap: 6 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "4px 0 10px" }}>
@@ -601,7 +755,7 @@ const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
                     <div style={{ textAlign: "center", lineHeight: 1.7 }}>
                       <div style={{ fontSize: 15, fontWeight: 600, color: "rgba(255,255,255,0.6)", marginBottom: 4 }}>{activeChat.name}</div>
                       <div style={{ fontSize: 13, color: "rgba(255,255,255,0.35)" }}>
-                        {activeChat.saved ? "Send yourself notes, links, or reminders." : `Start a conversation with ${activeChat.name}`}
+                        {activeChat.saved ? "Send yourself notes, files, or reminders." : `Start a conversation with ${activeChat.name}`}
                       </div>
                     </div>
                   </div>
@@ -613,8 +767,8 @@ const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
                   return (
                     <div key={msg.id} className="msg-in" style={{ display: "flex", justifyContent: isSent ? "flex-end" : "flex-start" }}>
                       <div style={{ maxWidth: "75%" }}>
-                        <div style={{ padding: "10px 14px", borderRadius: isSent ? "18px 18px 4px 18px" : "18px 18px 18px 4px", background: isSent ? "linear-gradient(135deg, #1a6fff, #0d4fd9)" : "rgba(20,26,44,1)", border: isSent ? "none" : "1px solid rgba(255,255,255,0.09)", color: "#ffffff", fontSize: 14, lineHeight: 1.55, wordBreak: "break-word" }}>
-                          {msg.content}
+                        <div style={{ padding: msg.file_url ? "6px 6px" : "10px 14px", borderRadius: isSent ? "18px 18px 4px 18px" : "18px 18px 18px 4px", background: isSent ? "linear-gradient(135deg, #1a6fff, #0d4fd9)" : "rgba(20,26,44,1)", border: isSent ? "none" : "1px solid rgba(255,255,255,0.09)", color: "#ffffff", fontSize: 14, lineHeight: 1.55, wordBreak: "break-word" }}>
+                          {msg.file_url ? renderFileMessage(msg) : msg.content}
                         </div>
                         <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 3, justifyContent: isSent ? "flex-end" : "flex-start" }}>
                           <span style={{ fontSize: 11, color: "rgba(255,255,255,0.35)" }}>{time}</span>
@@ -640,8 +794,7 @@ const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
                       setMessage(e.target.value);
                       if (!user || !activeChat?.userId) return;
                       supabase.channel("typing-room").send({
-                        type: "broadcast",
-                        event: "typing",
+                        type: "broadcast", event: "typing",
                         payload: { user_id: user.id, chat_id: activeChat.userId },
                       });
                     }}
@@ -649,7 +802,19 @@ const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
                     placeholder={activeChat.saved ? "Write a note to yourself..." : `Message ${activeChat.name}...`}
                     style={{ flex: 1, background: "transparent", border: "none", color: "#ffffff", fontSize: 14, padding: "3px 0", minWidth: 0 }} />
                   <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
-                    <Paperclip size={18} style={{ color: "rgba(255,255,255,0.4)", cursor: "pointer" }} />
+                    {/* Hidden file input */}
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="*/*"
+                      onChange={handleFileSelect}
+                      style={{ display: "none" }}
+                    />
+                    <Paperclip
+                      size={18}
+                      style={{ color: uploading ? "#60a5fa" : "rgba(255,255,255,0.4)", cursor: "pointer" }}
+                      onClick={() => fileInputRef.current?.click()}
+                    />
                     {message.trim() ? (
                       <div onClick={sendMessage} style={{ width: 36, height: 36, borderRadius: 11, background: sending ? "rgba(26,111,255,0.5)" : "linear-gradient(135deg, #1a6fff, #0d4fd9)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
                         <Send size={16} style={{ color: "#fff" }} />
@@ -663,7 +828,7 @@ const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
                 </div>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 5, marginTop: 6 }}>
                   <Shield size={11} style={{ color: "rgba(255,255,255,0.2)" }} />
-                  <span style={{ fontSize: 11, color: "rgba(255,255,255,0.2)" }}>End-to-end encrypted</span>
+                  <span style={{ fontSize: 11, color: "rgba(255,255,255,0.2)" }}>End-to-end encrypted · Max 50MB</span>
                 </div>
               </div>
             </>
