@@ -99,8 +99,10 @@ const [lightboxImg, setLightboxImg] = useState<string | null>(null);
   const [typingUsers, setTypingUsers] = useState<Set<string>>(new Set());
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+const inputRef = useRef<HTMLInputElement>(null);
+const fileInputRef = useRef<HTMLInputElement>(null);
+const activeChatRef = useRef<Conversation | null>(null);
+const isInitialLoad = useRef(true);
 
   // AUTH
   useEffect(() => {
@@ -132,6 +134,12 @@ const [lightboxImg, setLightboxImg] = useState<string | null>(null);
       if (lastSeenFn) window.removeEventListener("beforeunload", lastSeenFn);
     };
   }, []);
+
+  // Keep activeChatRef in sync with activeChat state
+  useEffect(() => {
+    activeChatRef.current = activeChat;
+    isInitialLoad.current = true;
+  }, [activeChat]);
 
   // Fetch messages and last seen when chat opens
   useEffect(() => {
@@ -173,9 +181,11 @@ const [lightboxImg, setLightboxImg] = useState<string | null>(null);
       const other = msg.sender_id === userId ? msg.receiver : msg.sender;
       if (!other || other.id === userId || seen.has(other.id)) continue;
       seen.add(other.id);
-      const unread = data.filter(m =>
-        m.sender_id === other.id && m.receiver_id === userId && !m.is_read
-      ).length;
+      const unread = activeChatRef.current?.userId === other.id
+        ? 0
+        : data.filter(m =>
+            m.sender_id === other.id && m.receiver_id === userId && !m.is_read
+          ).length;
       convs.push({
         id: other.id, name: other.full_name, username: other.username,
         avatar: getInitials(other.full_name), color: getColor(other.id),
@@ -280,6 +290,13 @@ const [lightboxImg, setLightboxImg] = useState<string | null>(null);
               (newMsg.sender_id === current.userId && newMsg.receiver_id === user.id)
             ));
           if (inThisChat) {
+            // If we're the receiver and chat is open, mark as read immediately
+            if (newMsg.receiver_id === user.id) {
+              supabase.from("messages")
+                .update({ is_read: true, is_delivered: true })
+                .eq("id", newMsg.id)
+                .then(() => {});
+            }
             setMessages(prev => {
               const optimisticIndex = prev.findIndex(
                 m => m.id.startsWith("optimistic-") && m.content === newMsg.content && m.sender_id === newMsg.sender_id
@@ -290,7 +307,10 @@ const [lightboxImg, setLightboxImg] = useState<string | null>(null);
                 return updated;
               }
               if (prev.some(m => m.id === newMsg.id)) return prev;
-              return [...prev, newMsg];
+              const msgToAdd = newMsg.receiver_id === user.id
+                ? { ...newMsg, is_read: true, is_delivered: true }
+                : newMsg;
+              return [...prev, msgToAdd];
             });
           }
           return current;
@@ -309,7 +329,13 @@ const [lightboxImg, setLightboxImg] = useState<string | null>(null);
   }, [user]);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (messages.length === 0) return;
+    if (isInitialLoad.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
+      isInitialLoad.current = false;
+    } else {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
   }, [messages]);
 
   useEffect(() => {
