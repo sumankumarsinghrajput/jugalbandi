@@ -176,6 +176,24 @@ const inputRef = useRef<HTMLInputElement>(null);
           presences.forEach((p: any) => online.add(p.user_id));
         });
         setOnlineUsers(online);
+
+        // When a user comes online, mark their received messages as delivered
+        // both in DB and local state so tick never reverts
+        online.forEach(async (onlineUserId) => {
+          if (onlineUserId === user.id) return;
+          // Update DB
+          await supabase.from("messages")
+            .update({ is_delivered: true })
+            .eq("sender_id", user.id)
+            .eq("receiver_id", onlineUserId)
+            .eq("is_delivered", false);
+          // Update local state immediately
+          setMessages(prev => prev.map(m =>
+            m.sender_id === user.id && m.receiver_id === onlineUserId
+              ? { ...m, is_delivered: true }
+              : m
+          ));
+        });
       })
       .subscribe(async (status) => {
         if (status === "SUBSCRIBED") {
