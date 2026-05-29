@@ -568,7 +568,7 @@ const inputRef = useRef<HTMLInputElement>(null);
                           {isSent && (
   msg.is_read
     ? <CheckCheck size={12} style={{ color: "#60a5fa" }} />
-    : onlineUsers.has(activeChat?.userId || "")
+    : (msg.is_delivered || onlineUsers.has(activeChat?.userId || ""))
     ? <CheckCheck size={12} style={{ color: "rgba(255,255,255,0.4)" }} />
     : <Check size={12} style={{ color: "rgba(255,255,255,0.4)" }} />
 )}
