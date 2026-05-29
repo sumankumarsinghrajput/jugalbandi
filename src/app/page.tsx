@@ -46,11 +46,11 @@ const getInitials = (name: string) => name?.split(" ").map(n => n[0]).join("").t
 const timeAgo = (date: string) => {
   const diff = Date.now() - new Date(date).getTime();
   const m = Math.floor(diff / 60000);
-  if (m < 1) return "now";
-  if (m < 60) return `${m}m`;
+  if (m < 2) return "recently";
+  if (m < 60) return `${m} minutes`;
   const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h`;
-  return `${Math.floor(h / 24)}d`;
+  if (h < 24) return `${h} hour${h > 1 ? "s" : ""}`;
+  return `${Math.floor(h / 24)} day${Math.floor(h / 24) > 1 ? "s" : ""}`;
 };
 
 export default function JugalbandiApp() {
@@ -324,6 +324,11 @@ export default function JugalbandiApp() {
   }
 
   async function handleLogout() {
+    if (user) {
+      await supabase.from("profiles")
+        .update({ last_seen: new Date().toISOString() })
+        .eq("id", user.id);
+    }
     await supabase.auth.signOut();
     window.location.href = "/auth";
   }
