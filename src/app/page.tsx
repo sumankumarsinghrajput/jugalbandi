@@ -663,8 +663,12 @@ const isInitialLoad = useRef(true);
                 <button className="icon-btn" onClick={handleLogout} style={{ color: "rgba(255,100,100,0.8)" }}><LogOut size={15} /></button>
               </div>
             </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, padding: "8px 12px", background: "rgba(26,111,255,0.09)", borderRadius: 10, border: "1px solid rgba(26,111,255,0.18)" }}>
-              <div style={{ width: 30, height: 30, borderRadius: "50%", background: "linear-gradient(135deg, #1a6fff, #7c3aed)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: "#fff", flexShrink: 0 }}>{myInitials}</div>
+            <div onClick={() => window.location.href = "/profile"} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, padding: "8px 12px", background: "rgba(26,111,255,0.09)", borderRadius: 10, border: "1px solid rgba(26,111,255,0.18)", cursor: "pointer" }}>
+              <div style={{ width: 30, height: 30, borderRadius: "50%", background: "linear-gradient(135deg, #1a6fff, #7c3aed)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: "#fff", flexShrink: 0, overflow: "hidden" }}>
+  {profile?.avatar_url
+    ? <img src={profile.avatar_url} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+    : myInitials}
+</div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 13, fontWeight: 600, color: "#ffffff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{profile?.full_name || "User"}</div>
                 <div style={{ fontSize: 11, color: "#60a5fa" }}>@{profile?.username || "—"}</div>
