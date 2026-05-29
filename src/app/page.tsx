@@ -7,6 +7,7 @@ import {
   Users, Star, Zap,
   Check, CheckCheck, Shield, LogOut, ArrowLeft, UserPlus, X,
   FileText, Film, Music, Archive, Download, Image, Info,
+  MessageCircle,
 } from "lucide-react";
 
 type Message = {
@@ -55,6 +56,17 @@ type ViewProfile = {
   bio?: string;
   last_seen?: string;
   online?: boolean;
+  color: string;
+};
+
+type AvatarPopup = {
+  userId: string;
+  name: string;
+  username: string;
+  avatar_url?: string;
+  color: string;
+  x: number;
+  y: number;
 };
 
 const COLORS = ["#7c3aed","#0d9488","#dc2626","#d97706","#059669","#be185d","#1d4ed8","#b45309"];
@@ -68,6 +80,11 @@ const timeAgo = (date: string) => {
   const h = Math.floor(m / 60);
   if (h < 24) return `${h} hour${h > 1 ? "s" : ""}`;
   return `${Math.floor(h / 24)} day${Math.floor(h / 24) > 1 ? "s" : ""}`;
+};
+const lastSeenText = (date: string | undefined) => {
+  if (!date) return "";
+  const t = timeAgo(date);
+  return t === "recently" ? "Last seen recently" : `Last seen ${t} ago`;
 };
 const formatFileSize = (bytes: number) => {
   if (bytes < 1024) return bytes + " B";
@@ -84,6 +101,14 @@ const getFileIcon = (type: string) => {
 
 const CLOUD_NAME = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME;
 const UPLOAD_PRESET = process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET;
+
+function Avatar({ url, initials, color, size }: { url?: string; initials: string; color: string; size: number }) {
+  return (
+    <div style={{ width: size, height: size, borderRadius: "50%", background: color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: size * 0.28, fontWeight: 700, color: "#fff", overflow: "hidden", flexShrink: 0 }}>
+      {url ? <img src={url} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : initials}
+    </div>
+  );
+}
 
 export default function JugalbandiApp() {
   const [user, setUser] = useState<any>(null);
@@ -106,7 +131,8 @@ export default function JugalbandiApp() {
   const [chatUserLastSeen, setChatUserLastSeen] = useState<string | null>(null);
   const [typingUsers, setTypingUsers] = useState<Set<string>>(new Set());
   const [lightboxImg, setLightboxImg] = useState<string | null>(null);
-  const [viewProfile, setViewProfile] = useState<ViewProfile | null>(null);
+  const [profilePanel, setProfilePanel] = useState<ViewProfile | null>(null);
+  const [avatarPopup, setAvatarPopup] = useState<AvatarPopup | null>(null);
   const [showMenu, setShowMenu] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -125,26 +151,16 @@ export default function JugalbandiApp() {
       setLoading(false);
       supabase.from("profiles").select("*").eq("id", session.user.id).single()
         .then(({ data }) => { if (data) setProfile(data); });
-      lastSeenFn = () => {
-        supabase.from("profiles").update({ last_seen: new Date().toISOString() }).eq("id", session.user.id).then(() => {});
-      };
+      lastSeenFn = () => { supabase.from("profiles").update({ last_seen: new Date().toISOString() }).eq("id", session.user.id).then(() => {}); };
       lastSeenFn();
       interval = setInterval(lastSeenFn, 30000);
       window.addEventListener("beforeunload", lastSeenFn);
     }).catch(() => { window.location.href = "/auth"; });
-    return () => {
-      clearInterval(interval);
-      if (lastSeenFn) window.removeEventListener("beforeunload", lastSeenFn);
-    };
+    return () => { clearInterval(interval); if (lastSeenFn) window.removeEventListener("beforeunload", lastSeenFn); };
   }, []);
 
-  // Keep activeChatRef in sync
-  useEffect(() => {
-    activeChatRef.current = activeChat;
-    isInitialLoad.current = true;
-  }, [activeChat]);
+  useEffect(() => { activeChatRef.current = activeChat; isInitialLoad.current = true; }, [activeChat]);
 
-  // Fetch messages + last seen + profile when chat opens
   useEffect(() => {
     if (activeChat && user) {
       fetchMessages(user.id, activeChat.saved ? "saved" : activeChat.userId!);
@@ -153,13 +169,10 @@ export default function JugalbandiApp() {
           .then(({ data }) => {
             if (data) {
               setChatUserLastSeen(data.last_seen);
-              // Update avatar in active chat if loaded
               setActiveChat(prev => prev ? { ...prev, avatar_url: data.avatar_url } : prev);
             }
           });
-      } else {
-        setChatUserLastSeen(null);
-      }
+      } else { setChatUserLastSeen(null); }
     }
   }, [activeChat?.id]);
 
@@ -171,16 +184,10 @@ export default function JugalbandiApp() {
       .order("created_at", { ascending: false });
     if (!data) return;
     const undelivered = data.filter(m => m.receiver_id === userId && !m.is_delivered);
-    for (const m of undelivered) {
-      await supabase.from("messages").update({ is_delivered: true }).eq("id", m.id);
-    }
+    for (const m of undelivered) await supabase.from("messages").update({ is_delivered: true }).eq("id", m.id);
     const seen = new Set<string>();
     const convs: Conversation[] = [];
-    convs.push({
-      id: "saved", name: "Saved Messages", username: "saved",
-      avatar: "★", color: "#1a6fff", lastMsg: "Your personal notes",
-      time: "", unread: 0, online: true, saved: true,
-    });
+    convs.push({ id: "saved", name: "Saved Messages", username: "saved", avatar: "★", color: "#1a6fff", lastMsg: "Your personal notes", time: "", unread: 0, online: true, saved: true });
     for (const msg of data) {
       const other = msg.sender_id === userId ? msg.receiver : msg.sender;
       if (!other || other.id === userId || seen.has(other.id)) continue;
@@ -200,9 +207,7 @@ export default function JugalbandiApp() {
 
   async function fetchMessages(userId: string, otherId: string) {
     if (otherId === "saved") {
-      const { data } = await supabase.from("messages").select("*")
-        .eq("sender_id", userId).eq("receiver_id", userId)
-        .order("created_at", { ascending: true }).limit(100);
+      const { data } = await supabase.from("messages").select("*").eq("sender_id", userId).eq("receiver_id", userId).order("created_at", { ascending: true }).limit(100);
       if (data) setMessages(data);
     } else {
       const { data } = await supabase.from("messages").select("*")
@@ -210,58 +215,48 @@ export default function JugalbandiApp() {
         .order("created_at", { ascending: true }).limit(100);
       if (data) {
         setMessages(data);
-        const undelivered = data.filter(m => m.receiver_id === userId && !m.is_delivered);
-        for (const m of undelivered) await supabase.from("messages").update({ is_delivered: true }).eq("id", m.id);
-        const unread = data.filter(m => m.receiver_id === userId && !m.is_read);
-        for (const m of unread) await supabase.from("messages").update({ is_read: true }).eq("id", m.id);
+        for (const m of data.filter(m => m.receiver_id === userId && !m.is_delivered))
+          await supabase.from("messages").update({ is_delivered: true }).eq("id", m.id);
+        for (const m of data.filter(m => m.receiver_id === userId && !m.is_read))
+          await supabase.from("messages").update({ is_read: true }).eq("id", m.id);
       }
     }
   }
 
-  // Typing
   useEffect(() => {
     if (!user) return;
-    const typingChannel = supabase.channel("typing-room")
+    const ch = supabase.channel("typing-room")
       .on("broadcast", { event: "typing" }, (payload) => {
         if (payload.payload.user_id === user.id) return;
         if (payload.payload.chat_id !== activeChatRef.current?.userId && payload.payload.chat_id !== user.id) return;
         setTypingUsers(prev => new Set(prev).add(payload.payload.user_id));
-        setTimeout(() => {
-          setTypingUsers(prev => { const n = new Set(prev); n.delete(payload.payload.user_id); return n; });
-        }, 3000);
+        setTimeout(() => setTypingUsers(prev => { const n = new Set(prev); n.delete(payload.payload.user_id); return n; }), 3000);
       }).subscribe();
-    return () => { supabase.removeChannel(typingChannel); };
+    return () => { supabase.removeChannel(ch); };
   }, [user]);
 
-  // Presence
   useEffect(() => {
     if (!user) return;
-    const presenceChannel = supabase.channel("presence-room")
+    const pc = supabase.channel("presence-room")
       .on("presence", { event: "sync" }, () => {
-        const state = presenceChannel.presenceState<{ user_id: string }>();
+        const state = pc.presenceState<{ user_id: string }>();
         const online = new Set<string>();
         Object.values(state).forEach((p: any) => p.forEach((u: any) => online.add(u.user_id)));
         setOnlineUsers(online);
-        online.forEach(async (onlineUserId) => {
-          if (onlineUserId === user.id) return;
-          await supabase.from("messages").update({ is_delivered: true })
-            .eq("sender_id", user.id).eq("receiver_id", onlineUserId).eq("is_delivered", false);
-          setMessages(prev => prev.map(m =>
-            m.sender_id === user.id && m.receiver_id === onlineUserId ? { ...m, is_delivered: true } : m
-          ));
+        online.forEach(async (uid) => {
+          if (uid === user.id) return;
+          await supabase.from("messages").update({ is_delivered: true }).eq("sender_id", user.id).eq("receiver_id", uid).eq("is_delivered", false);
+          setMessages(prev => prev.map(m => m.sender_id === user.id && m.receiver_id === uid ? { ...m, is_delivered: true } : m));
         });
       })
-      .subscribe(async (status) => {
-        if (status === "SUBSCRIBED") await presenceChannel.track({ user_id: user.id });
-      });
-    return () => { supabase.removeChannel(presenceChannel); };
+      .subscribe(async (status) => { if (status === "SUBSCRIBED") await pc.track({ user_id: user.id }); });
+    return () => { supabase.removeChannel(pc); };
   }, [user]);
 
-  // Realtime messages
   useEffect(() => {
     if (!user) return;
     fetchConversations(user.id);
-    const channel = supabase.channel("realtime-" + user.id)
+    const ch = supabase.channel("realtime-" + user.id)
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "messages" }, (payload) => {
         const newMsg = payload.new as Message;
         if (newMsg.sender_id !== user.id && newMsg.receiver_id !== user.id) return;
@@ -269,24 +264,14 @@ export default function JugalbandiApp() {
           if (!current) return current;
           const inThisChat =
             (current.saved && newMsg.sender_id === user.id && newMsg.receiver_id === user.id) ||
-            (!current.saved && (
-              (newMsg.sender_id === user.id && newMsg.receiver_id === current.userId) ||
-              (newMsg.sender_id === current.userId && newMsg.receiver_id === user.id)
-            ));
+            (!current.saved && ((newMsg.sender_id === user.id && newMsg.receiver_id === current.userId) || (newMsg.sender_id === current.userId && newMsg.receiver_id === user.id)));
           if (inThisChat) {
-            if (newMsg.receiver_id === user.id) {
-              supabase.from("messages").update({ is_read: true, is_delivered: true }).eq("id", newMsg.id).then(() => {});
-            }
+            if (newMsg.receiver_id === user.id) supabase.from("messages").update({ is_read: true, is_delivered: true }).eq("id", newMsg.id).then(() => {});
             setMessages(prev => {
-              const optimisticIndex = prev.findIndex(
-                m => m.id.startsWith("optimistic-") && m.content === newMsg.content && m.sender_id === newMsg.sender_id
-              );
-              if (optimisticIndex !== -1) {
-                const updated = [...prev]; updated[optimisticIndex] = newMsg; return updated;
-              }
+              const oi = prev.findIndex(m => m.id.startsWith("optimistic-") && m.content === newMsg.content && m.sender_id === newMsg.sender_id);
+              if (oi !== -1) { const u = [...prev]; u[oi] = newMsg; return u; }
               if (prev.some(m => m.id === newMsg.id)) return prev;
-              const msgToAdd = newMsg.receiver_id === user.id ? { ...newMsg, is_read: true, is_delivered: true } : newMsg;
-              return [...prev, msgToAdd];
+              return [...prev, newMsg.receiver_id === user.id ? { ...newMsg, is_read: true, is_delivered: true } : newMsg];
             });
           }
           return current;
@@ -294,45 +279,36 @@ export default function JugalbandiApp() {
         fetchConversations(user.id);
       })
       .on("postgres_changes", { event: "UPDATE", schema: "public", table: "messages" }, (payload) => {
-        const updated = payload.new as Message;
-        if (updated.sender_id !== user.id && updated.receiver_id !== user.id) return;
-        setMessages(prev => prev.map(m => m.id === updated.id ? { ...m, is_read: updated.is_read, is_delivered: updated.is_delivered } : m));
-      })
-      .subscribe();
-    return () => { supabase.removeChannel(channel); };
+        const u = payload.new as Message;
+        if (u.sender_id !== user.id && u.receiver_id !== user.id) return;
+        setMessages(prev => prev.map(m => m.id === u.id ? { ...m, is_read: u.is_read, is_delivered: u.is_delivered } : m));
+      }).subscribe();
+    return () => { supabase.removeChannel(ch); };
   }, [user]);
 
   useEffect(() => {
     if (messages.length === 0) return;
-    if (isInitialLoad.current) {
-      messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
-      isInitialLoad.current = false;
-    } else {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-    }
+    if (isInitialLoad.current) { messagesEndRef.current?.scrollIntoView({ behavior: "auto" }); isInitialLoad.current = false; }
+    else messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
   useEffect(() => {
     if (!userSearch.trim() || !user) { setSearchResults([]); return; }
-    const timer = setTimeout(async () => {
+    const t = setTimeout(async () => {
       setSearching(true);
-      const { data } = await supabase.from("profiles").select("*")
-        .neq("id", user.id).or(`username.ilike.%${userSearch}%,full_name.ilike.%${userSearch}%`).limit(8);
-      setSearchResults(data || []);
-      setSearching(false);
+      const { data } = await supabase.from("profiles").select("*").neq("id", user.id).or(`username.ilike.%${userSearch}%,full_name.ilike.%${userSearch}%`).limit(8);
+      setSearchResults(data || []); setSearching(false);
     }, 300);
-    return () => clearTimeout(timer);
+    return () => clearTimeout(t);
   }, [userSearch, user]);
 
   async function uploadFile(file: File) {
     if (!CLOUD_NAME || !UPLOAD_PRESET) { alert("Cloudinary not configured."); return null; }
     setUploading(true);
     try {
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append("upload_preset", UPLOAD_PRESET);
-      const response = await fetch(`https://api.cloudinary.com/v1_1/${CLOUD_NAME}/auto/upload`, { method: "POST", body: formData });
-      const data = await response.json();
+      const fd = new FormData(); fd.append("file", file); fd.append("upload_preset", UPLOAD_PRESET);
+      const res = await fetch(`https://api.cloudinary.com/v1_1/${CLOUD_NAME}/auto/upload`, { method: "POST", body: fd });
+      const data = await res.json();
       setUploading(false);
       return { url: data.secure_url, type: file.type, name: file.name, size: file.size };
     } catch { setUploading(false); alert("Upload failed."); return null; }
@@ -342,72 +318,43 @@ export default function JugalbandiApp() {
     const file = e.target.files?.[0];
     if (!file || !user || !activeChat) return;
     if (file.size > 50 * 1024 * 1024) { alert("File too large. Max 50MB."); return; }
-    const uploaded = await uploadFile(file);
-    if (!uploaded) return;
-    const receiverId = activeChat.saved ? user.id : activeChat.userId!;
-    const optimisticMsg: Message = {
-      id: "optimistic-" + Date.now(), content: "",
-      sender_id: user.id, receiver_id: receiverId,
-      created_at: new Date().toISOString(), is_read: false, is_delivered: false,
-      file_url: uploaded.url, file_type: uploaded.type, file_name: uploaded.name, file_size: uploaded.size,
-    };
-    setMessages(prev => [...prev, optimisticMsg]);
-    const { data, error } = await supabase.from("messages")
-      .insert({ sender_id: user.id, receiver_id: receiverId, content: "", file_url: uploaded.url, file_type: uploaded.type, file_name: uploaded.name, file_size: uploaded.size })
-      .select().single();
-    if (error) setMessages(prev => prev.filter(m => m.id !== optimisticMsg.id));
-    else if (data) { setMessages(prev => prev.map(m => m.id === optimisticMsg.id ? data : m)); fetchConversations(user.id); }
+    const up = await uploadFile(file);
+    if (!up) return;
+    const rid = activeChat.saved ? user.id : activeChat.userId!;
+    const opt: Message = { id: "optimistic-" + Date.now(), content: "", sender_id: user.id, receiver_id: rid, created_at: new Date().toISOString(), is_read: false, is_delivered: false, file_url: up.url, file_type: up.type, file_name: up.name, file_size: up.size };
+    setMessages(prev => [...prev, opt]);
+    const { data, error } = await supabase.from("messages").insert({ sender_id: user.id, receiver_id: rid, content: "", file_url: up.url, file_type: up.type, file_name: up.name, file_size: up.size }).select().single();
+    if (error) setMessages(prev => prev.filter(m => m.id !== opt.id));
+    else if (data) { setMessages(prev => prev.map(m => m.id === opt.id ? data : m)); fetchConversations(user.id); }
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
   async function sendMessage() {
     if (!message.trim() || !user || sending || !activeChat) return;
     setSending(true);
-    const content = message.trim();
-    setMessage("");
-    const receiverId = activeChat.saved ? user.id : activeChat.userId!;
-    const optimisticMsg: Message = {
-      id: "optimistic-" + Date.now(), content,
-      sender_id: user.id, receiver_id: receiverId,
-      created_at: new Date().toISOString(), is_read: false, is_delivered: false,
-    };
-    setMessages(prev => [...prev, optimisticMsg]);
-    const { data, error } = await supabase.from("messages")
-      .insert({ sender_id: user.id, receiver_id: receiverId, content }).select().single();
-    if (error) setMessages(prev => prev.filter(m => m.id !== optimisticMsg.id));
-    else if (data) { setMessages(prev => prev.map(m => m.id === optimisticMsg.id ? data : m)); fetchConversations(user.id); }
+    const content = message.trim(); setMessage("");
+    const rid = activeChat.saved ? user.id : activeChat.userId!;
+    const opt: Message = { id: "optimistic-" + Date.now(), content, sender_id: user.id, receiver_id: rid, created_at: new Date().toISOString(), is_read: false, is_delivered: false };
+    setMessages(prev => [...prev, opt]);
+    const { data, error } = await supabase.from("messages").insert({ sender_id: user.id, receiver_id: rid, content }).select().single();
+    if (error) setMessages(prev => prev.filter(m => m.id !== opt.id));
+    else if (data) { setMessages(prev => prev.map(m => m.id === opt.id ? data : m)); fetchConversations(user.id); }
     setSending(false);
   }
 
   function downloadFile(url: string, filename: string) {
-    const proxyUrl = `/api/download?url=${encodeURIComponent(url)}&filename=${encodeURIComponent(filename || "download")}`;
     const a = document.createElement("a");
-    a.href = proxyUrl; a.download = filename || "download";
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    a.href = `/api/download?url=${encodeURIComponent(url)}&filename=${encodeURIComponent(filename || "download")}`;
+    a.download = filename || "download"; document.body.appendChild(a); a.click(); document.body.removeChild(a);
   }
 
   function renderFileMessage(msg: Message) {
-    const isImage = msg.file_type?.startsWith("image/");
-    const isVideo = msg.file_type?.startsWith("video/");
-    const isAudio = msg.file_type?.startsWith("audio/");
-    if (isImage) return (
-      <img src={msg.file_url} alt={msg.file_name} onClick={() => setLightboxImg(msg.file_url!)}
-        style={{ maxWidth: "100%", maxHeight: 260, borderRadius: 10, display: "block", cursor: "zoom-in" }} />
-    );
-    if (isVideo) return (
-      <video controls style={{ maxWidth: "100%", maxHeight: 260, borderRadius: 10, display: "block" }}>
-        <source src={msg.file_url} type={msg.file_type} />
-      </video>
-    );
-    if (isAudio) return (
-      <audio controls style={{ width: "100%", marginTop: 4 }}>
-        <source src={msg.file_url} type={msg.file_type} />
-      </audio>
-    );
+    if (msg.file_type?.startsWith("image/")) return <img src={msg.file_url} alt={msg.file_name} onClick={() => setLightboxImg(msg.file_url!)} style={{ maxWidth: "100%", maxHeight: 260, borderRadius: 10, display: "block", cursor: "zoom-in" }} />;
+    if (msg.file_type?.startsWith("video/")) return <video controls style={{ maxWidth: "100%", maxHeight: 260, borderRadius: 10 }}><source src={msg.file_url} type={msg.file_type} /></video>;
+    if (msg.file_type?.startsWith("audio/")) return <audio controls style={{ width: "100%" }}><source src={msg.file_url} type={msg.file_type} /></audio>;
     return (
-      <div onClick={() => downloadFile(msg.file_url!, msg.file_name || "file")}
-        style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: "rgba(255,255,255,0.08)", borderRadius: 10, cursor: "pointer" }}>
-        <div style={{ color: "#60a5fa", flexShrink: 0 }}>{getFileIcon(msg.file_type || "")}</div>
+      <div onClick={() => downloadFile(msg.file_url!, msg.file_name || "file")} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: "rgba(255,255,255,0.08)", borderRadius: 10, cursor: "pointer" }}>
+        <div style={{ color: "#60a5fa" }}>{getFileIcon(msg.file_type || "")}</div>
         <div style={{ minWidth: 0 }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: "#fff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 180 }}>{msg.file_name}</div>
           <div style={{ fontSize: 11, color: "rgba(255,255,255,0.5)" }}>{formatFileSize(msg.file_size || 0)}</div>
@@ -417,57 +364,93 @@ export default function JugalbandiApp() {
     );
   }
 
-  async function openViewProfile(userId: string) {
+  async function openProfilePanel(userId: string) {
+    setAvatarPopup(null);
     const { data } = await supabase.from("profiles").select("*").eq("id", userId).single();
-    if (data) setViewProfile({
-      id: data.id, name: data.full_name, username: data.username,
-      avatar_url: data.avatar_url, bio: data.bio, last_seen: data.last_seen,
-      online: onlineUsers.has(data.id),
-    });
+    if (data) setProfilePanel({ id: data.id, name: data.full_name, username: data.username, avatar_url: data.avatar_url, bio: data.bio, last_seen: data.last_seen, online: onlineUsers.has(data.id), color: getColor(data.id) });
   }
 
   function openUserChat(p: Profile) {
-    const conv: Conversation = {
-      id: p.id, name: p.full_name, username: p.username,
-      avatar: getInitials(p.full_name), avatar_url: p.avatar_url,
-      color: getColor(p.id), lastMsg: "", time: "", unread: 0, online: false, userId: p.id,
-    };
+    const conv: Conversation = { id: p.id, name: p.full_name, username: p.username, avatar: getInitials(p.full_name), avatar_url: p.avatar_url, color: getColor(p.id), lastMsg: "", time: "", unread: 0, online: false, userId: p.id };
     setActiveChat(conv); setShowChat(true); setShowSearch(false); setUserSearch(""); setSearchResults([]);
     if (!conversations.find(c => c.id === p.id)) {
-      setConversations(prev => {
-        const filtered = prev.filter(c => c.id !== p.id);
-        const saved = filtered.find(c => c.saved);
-        const rest = filtered.filter(c => !c.saved);
-        return saved ? [saved, conv, ...rest] : [conv, ...rest];
-      });
+      setConversations(prev => { const f = prev.filter(c => c.id !== p.id); const s = f.find(c => c.saved); const r = f.filter(c => !c.saved); return s ? [s, conv, ...r] : [conv, ...r]; });
     }
   }
 
   async function handleLogout() {
     if (user) await supabase.from("profiles").update({ last_seen: new Date().toISOString() }).eq("id", user.id);
-    await supabase.auth.signOut();
-    window.location.href = "/auth";
+    await supabase.auth.signOut(); window.location.href = "/auth";
   }
 
   function openChat(chat: Conversation) {
-    setActiveChat(chat); setShowChat(true); setMessages([]);
+    setActiveChat(chat); setShowChat(true); setMessages([]); setProfilePanel(null);
     setConversations(prev => prev.map(c => c.id === chat.id ? { ...c, unread: 0 } : c));
   }
 
-  function backToList() { setShowChat(false); setActiveChat(null); setMessages([]); }
+  function backToList() { setShowChat(false); setActiveChat(null); setMessages([]); setProfilePanel(null); }
 
   const myInitials = profile?.full_name ? getInitials(profile.full_name) : "U";
-  const filteredConvs = conversations.filter(c =>
-    c.name.toLowerCase().includes(search.toLowerCase()) ||
-    c.username.toLowerCase().includes(search.toLowerCase())
-  );
+  const filteredConvs = conversations.filter(c => c.name.toLowerCase().includes(search.toLowerCase()) || c.username.toLowerCase().includes(search.toLowerCase()));
 
   if (loading) return (
     <div style={{ height: "100vh", background: "#0a0e1a", display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 16, fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
-      <img src="/icon-512.png" alt="Jugalbandi" style={{ width: 64, height: 64, borderRadius: 20 }} />
+      <img src="/icon-512.png" style={{ width: 64, height: 64, borderRadius: 20 }} />
       <div style={{ color: "rgba(255,255,255,0.5)", fontSize: 15 }}>Loading Jugalbandi...</div>
     </div>
   );
+
+  // Profile Panel Content
+  const ProfilePanelContent = profilePanel ? (
+    <div style={{ flex: 1, display: "flex", flexDirection: "column", height: "100%", background: "#0a0e1a" }}>
+      {/* Header */}
+      <div style={{ padding: "10px 14px", borderBottom: "1px solid rgba(255,255,255,0.07)", display: "flex", alignItems: "center", gap: 12, background: "#0f1525", flexShrink: 0 }}>
+        <button onClick={() => setProfilePanel(null)} style={{ width: 36, height: 36, borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(255,255,255,0.05)", border: "none", color: "rgba(255,255,255,0.6)", cursor: "pointer" }}>
+          <ArrowLeft size={17} />
+        </button>
+        <span style={{ fontSize: 16, fontWeight: 700, color: "#fff" }}>Profile</span>
+      </div>
+      {/* Content */}
+      <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", alignItems: "center", padding: "32px 20px 24px", gap: 0 }}>
+        {/* Avatar */}
+        <div onClick={() => profilePanel.avatar_url && setLightboxImg(profilePanel.avatar_url)}
+          style={{ width: 100, height: 100, borderRadius: "50%", background: profilePanel.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 30, fontWeight: 700, color: "#fff", overflow: "hidden", cursor: profilePanel.avatar_url ? "zoom-in" : "default", border: "3px solid rgba(255,255,255,0.1)", marginBottom: 16 }}>
+          {profilePanel.avatar_url ? <img src={profilePanel.avatar_url} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : getInitials(profilePanel.name)}
+        </div>
+        {/* Name */}
+        <div style={{ fontSize: 22, fontWeight: 700, color: "#fff", textAlign: "center", marginBottom: 4 }}>{profilePanel.name}</div>
+        <div style={{ fontSize: 14, color: "#60a5fa", marginBottom: 12 }}>@{profilePanel.username}</div>
+        {/* Online / Last seen */}
+        {profilePanel.online
+          ? <div style={{ padding: "4px 14px", background: "rgba(34,197,94,0.12)", border: "1px solid rgba(34,197,94,0.25)", borderRadius: 999, fontSize: 12, color: "#22c55e", marginBottom: 20 }}>● Online</div>
+          : profilePanel.last_seen
+          ? <div style={{ fontSize: 12, color: "rgba(255,255,255,0.35)", marginBottom: 20 }}>{lastSeenText(profilePanel.last_seen)}</div>
+          : null}
+        {/* Bio */}
+        {profilePanel.bio && (
+          <div style={{ width: "100%", maxWidth: 400, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 14, padding: "14px 18px", marginBottom: 16 }}>
+            <div style={{ fontSize: 11, color: "rgba(255,255,255,0.4)", marginBottom: 6, textTransform: "uppercase", letterSpacing: 1 }}>Bio</div>
+            <div style={{ fontSize: 14, color: "rgba(255,255,255,0.8)", lineHeight: 1.6 }}>{profilePanel.bio}</div>
+          </div>
+        )}
+        {/* Message button if not own profile */}
+        {profilePanel.id !== user?.id && (
+          <button onClick={() => {
+            const conv = conversations.find(c => c.userId === profilePanel.id);
+            if (conv) { openChat(conv); }
+            else {
+              const newConv: Conversation = { id: profilePanel.id, name: profilePanel.name, username: profilePanel.username, avatar: getInitials(profilePanel.name), avatar_url: profilePanel.avatar_url, color: profilePanel.color, lastMsg: "", time: "", unread: 0, online: false, userId: profilePanel.id };
+              setActiveChat(newConv); setShowChat(true); setMessages([]);
+              setConversations(prev => { const f = prev.filter(c => c.id !== profilePanel.id); const s = f.find(c => c.saved); const r = f.filter(c => !c.saved); return s ? [s, newConv, ...r] : [newConv, ...r]; });
+            }
+            setProfilePanel(null);
+          }} style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 32px", background: "linear-gradient(135deg, #1a6fff, #0d4fd9)", border: "none", borderRadius: 14, color: "#fff", fontSize: 14, fontWeight: 600, cursor: "pointer", marginTop: 8 }}>
+            <MessageCircle size={16} /> Message
+          </button>
+        )}
+      </div>
+    </div>
+  ) : null;
 
   return (
     <>
@@ -481,7 +464,7 @@ export default function JugalbandiApp() {
         .icon-btn:hover { background: rgba(255,255,255,0.1); }
         ::-webkit-scrollbar { width: 3px; }
         ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 99px; }
-        input, textarea { outline: none; font-family: inherit; }
+        input { outline: none; font-family: inherit; }
         input::placeholder { color: rgba(255,255,255,0.3); }
         .chat-item { display: flex; align-items: center; gap: 12px; padding: 12px 16px; cursor: pointer; border-left: 3px solid transparent; transition: all 0.15s; }
         .chat-item:hover { background: rgba(255,255,255,0.04); }
@@ -498,7 +481,7 @@ export default function JugalbandiApp() {
         }
       `}</style>
 
-      <div className="app">
+      <div className="app" onClick={() => { setAvatarPopup(null); setShowMenu(false); }}>
 
         {/* Lightbox */}
         {lightboxImg && (
@@ -511,46 +494,19 @@ export default function JugalbandiApp() {
           </div>
         )}
 
-        {/* View Profile Modal */}
-        {viewProfile && (
-          <div onClick={() => setViewProfile(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 999, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
-            <div onClick={e => e.stopPropagation()} style={{ background: "#0f1525", borderRadius: 20, width: "100%", maxWidth: 360, overflow: "hidden", border: "1px solid rgba(255,255,255,0.1)" }}>
-              {/* Cover */}
-              <div style={{ height: 100, background: `linear-gradient(135deg, ${getColor(viewProfile.id)}, #0a0e1a)`, position: "relative" }}>
-                <button onClick={() => setViewProfile(null)} style={{ position: "absolute", top: 12, right: 12, background: "rgba(0,0,0,0.4)", border: "none", borderRadius: "50%", width: 32, height: 32, color: "#fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                  <X size={15} />
-                </button>
+        {/* Small Avatar Popup (sidebar only) */}
+        {avatarPopup && (
+          <div onClick={e => e.stopPropagation()} style={{ position: "fixed", top: Math.min(avatarPopup.y, window.innerHeight - 200), left: Math.min(avatarPopup.x, window.innerWidth - 220), zIndex: 200, background: "#1a2236", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 16, padding: "16px", width: 200, boxShadow: "0 12px 40px rgba(0,0,0,0.5)" }}>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+              <div style={{ width: 64, height: 64, borderRadius: "50%", background: avatarPopup.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, fontWeight: 700, color: "#fff", overflow: "hidden" }}>
+                {avatarPopup.avatar_url ? <img src={avatarPopup.avatar_url} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : getInitials(avatarPopup.name)}
               </div>
-              {/* Avatar */}
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", padding: "0 20px", marginTop: -40 }}>
-                <div onClick={() => { if (viewProfile.avatar_url) { setViewProfile(null); setLightboxImg(viewProfile.avatar_url); } }}
-                  style={{ width: 80, height: 80, borderRadius: "50%", background: getColor(viewProfile.id), border: "3px solid #0f1525", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, fontWeight: 700, color: "#fff", overflow: "hidden", cursor: viewProfile.avatar_url ? "zoom-in" : "default" }}>
-                  {viewProfile.avatar_url
-                    ? <img src={viewProfile.avatar_url} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                    : getInitials(viewProfile.name)}
-                </div>
-                <div style={{ marginBottom: 8, display: "flex", gap: 8 }}>
-                  {onlineUsers.has(viewProfile.id) && (
-                    <div style={{ padding: "4px 10px", background: "rgba(34,197,94,0.15)", border: "1px solid rgba(34,197,94,0.3)", borderRadius: 999, fontSize: 11, color: "#22c55e" }}>● Online</div>
-                  )}
-                </div>
-              </div>
-              {/* Info */}
-              <div style={{ padding: "12px 20px 20px" }}>
-                <div style={{ fontSize: 18, fontWeight: 700, color: "#fff", marginBottom: 2 }}>{viewProfile.name}</div>
-                <div style={{ fontSize: 13, color: "#60a5fa", marginBottom: 10 }}>@{viewProfile.username}</div>
-                {viewProfile.bio && (
-                  <div style={{ fontSize: 13, color: "rgba(255,255,255,0.6)", lineHeight: 1.6, marginBottom: 10, padding: "8px 12px", background: "rgba(255,255,255,0.04)", borderRadius: 10 }}>{viewProfile.bio}</div>
-                )}
-                {!onlineUsers.has(viewProfile.id) && viewProfile.last_seen && (
-                  <div style={{ fontSize: 12, color: "rgba(255,255,255,0.35)", marginBottom: 14 }}>
-                    Last seen {timeAgo(viewProfile.last_seen) === "recently" ? "recently" : `${timeAgo(viewProfile.last_seen)} ago`}
-                  </div>
-                )}
-                <button onClick={() => { setViewProfile(null); }} style={{ width: "100%", padding: "11px", background: "linear-gradient(135deg, #1a6fff, #0d4fd9)", border: "none", borderRadius: 12, color: "#fff", fontSize: 14, fontWeight: 600, cursor: "pointer" }}>
-                  Close
-                </button>
-              </div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: "#fff", textAlign: "center" }}>{avatarPopup.name}</div>
+              <div style={{ fontSize: 12, color: "#60a5fa" }}>@{avatarPopup.username}</div>
+              {onlineUsers.has(avatarPopup.userId) && <div style={{ fontSize: 11, color: "#22c55e" }}>● Online</div>}
+              <button onClick={() => openProfilePanel(avatarPopup.userId)} style={{ width: "100%", marginTop: 4, padding: "8px", background: "rgba(26,111,255,0.2)", border: "1px solid rgba(26,111,255,0.3)", borderRadius: 10, color: "#60a5fa", fontSize: 13, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+                <Info size={13} /> View Profile
+              </button>
             </div>
           </div>
         )}
@@ -567,16 +523,12 @@ export default function JugalbandiApp() {
               </div>
               <div style={{ flex: 1, overflowY: "auto", padding: "8px 0" }}>
                 {searching && <div style={{ padding: "20px", textAlign: "center", color: "rgba(255,255,255,0.3)", fontSize: 13 }}>Searching...</div>}
-                {!searching && userSearch && searchResults.length === 0 && (
-                  <div style={{ padding: "20px", textAlign: "center", color: "rgba(255,255,255,0.3)", fontSize: 13 }}>No users found for "{userSearch}"</div>
-                )}
+                {!searching && userSearch && searchResults.length === 0 && <div style={{ padding: "20px", textAlign: "center", color: "rgba(255,255,255,0.3)", fontSize: 13 }}>No users found</div>}
                 {searchResults.map(p => (
                   <div key={p.id} onClick={() => openUserChat(p)} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", cursor: "pointer" }}
                     onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.05)")}
                     onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
-                    <div style={{ width: 44, height: 44, borderRadius: "50%", background: getColor(p.id), display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 700, color: "#fff", flexShrink: 0, overflow: "hidden" }}>
-                      {p.avatar_url ? <img src={p.avatar_url} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : getInitials(p.full_name)}
-                    </div>
+                    <Avatar url={p.avatar_url} initials={getInitials(p.full_name)} color={getColor(p.id)} size={44} />
                     <div>
                       <div style={{ fontSize: 14, fontWeight: 600, color: "#fff" }}>{p.full_name}</div>
                       <div style={{ fontSize: 12, color: "#60a5fa" }}>@{p.username}</div>
@@ -599,28 +551,26 @@ export default function JugalbandiApp() {
           <div style={{ padding: "14px 16px 12px", borderBottom: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <img src="/icon-192.png" alt="Jugalbandi" style={{ width: 34, height: 34, borderRadius: 10, flexShrink: 0, objectFit: "cover" }} />
-                <span style={{ fontSize: 19, fontWeight: 700, color: "#ffffff" }}>Jugalbandi</span>
+                <img src="/icon-192.png" style={{ width: 34, height: 34, borderRadius: 10, objectFit: "cover" }} />
+                <span style={{ fontSize: 19, fontWeight: 700, color: "#fff" }}>Jugalbandi</span>
               </div>
               <div style={{ display: "flex", gap: 6 }}>
-                <button className="icon-btn" title="New chat" onClick={() => setShowSearch(true)}><UserPlus size={15} /></button>
+                <button className="icon-btn" onClick={() => setShowSearch(true)}><UserPlus size={15} /></button>
                 <button className="icon-btn" onClick={handleLogout} style={{ color: "rgba(255,100,100,0.8)" }}><LogOut size={15} /></button>
               </div>
             </div>
             <div onClick={() => window.location.href = "/profile"} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, padding: "8px 12px", background: "rgba(26,111,255,0.09)", borderRadius: 10, border: "1px solid rgba(26,111,255,0.18)", cursor: "pointer" }}>
-              <div style={{ width: 30, height: 30, borderRadius: "50%", background: "linear-gradient(135deg, #1a6fff, #7c3aed)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: "#fff", flexShrink: 0, overflow: "hidden" }}>
-                {profile?.avatar_url ? <img src={profile.avatar_url} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : myInitials}
-              </div>
+              <Avatar url={profile?.avatar_url} initials={myInitials} color="linear-gradient(135deg, #1a6fff, #7c3aed)" size={30} />
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: "#ffffff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{profile?.full_name || "User"}</div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "#fff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{profile?.full_name || "User"}</div>
                 <div style={{ fontSize: 11, color: "#60a5fa" }}>@{profile?.username || "—"}</div>
               </div>
-              <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#22c55e", flexShrink: 0 }} />
+              <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#22c55e" }} />
             </div>
             <div style={{ position: "relative" }}>
               <Search size={14} style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", color: "rgba(255,255,255,0.35)", pointerEvents: "none" }} />
               <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search conversations..."
-                style={{ width: "100%", background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: 10, padding: "9px 10px 9px 34px", color: "#ffffff", fontSize: 13 }} />
+                style={{ width: "100%", background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: 10, padding: "9px 10px 9px 34px", color: "#fff", fontSize: 13 }} />
             </div>
           </div>
 
@@ -635,31 +585,26 @@ export default function JugalbandiApp() {
           <div style={{ flex: 1, overflowY: "auto" }}>
             {filteredConvs.length === 0 && (
               <div style={{ padding: "32px 20px", textAlign: "center" }}>
-                <div style={{ width: 52, height: 52, borderRadius: "50%", background: "rgba(26,111,255,0.12)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 12px" }}>
-                  <UserPlus size={22} style={{ color: "#60a5fa" }} />
-                </div>
-                <div style={{ fontSize: 13, color: "rgba(255,255,255,0.35)", lineHeight: 1.7 }}>
-                  No conversations yet.<br />
-                  <span onClick={() => setShowSearch(true)} style={{ color: "#60a5fa", cursor: "pointer" }}>Find someone to chat with →</span>
-                </div>
+                <div style={{ width: 52, height: 52, borderRadius: "50%", background: "rgba(26,111,255,0.12)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 12px" }}><UserPlus size={22} style={{ color: "#60a5fa" }} /></div>
+                <div style={{ fontSize: 13, color: "rgba(255,255,255,0.35)", lineHeight: 1.7 }}>No conversations yet.<br /><span onClick={() => setShowSearch(true)} style={{ color: "#60a5fa", cursor: "pointer" }}>Find someone to chat with →</span></div>
               </div>
             )}
             {filteredConvs.map(chat => (
               <div key={chat.id} className={`chat-item${activeChat?.id === chat.id ? " active" : ""}`} onClick={() => openChat(chat)}>
                 <div style={{ position: "relative", flexShrink: 0 }}>
-                  <div onClick={e => { if (chat.userId) { e.stopPropagation(); openViewProfile(chat.userId); } }}
-                    style={{ width: 46, height: 46, borderRadius: "50%", background: chat.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: chat.saved ? 18 : 13, fontWeight: 700, color: "#fff", overflow: "hidden", cursor: chat.userId ? "pointer" : "default" }}>
-                    {chat.avatar_url
-                      ? <img src={chat.avatar_url} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                      : chat.avatar}
+                  <div onClick={e => {
+                    if (!chat.userId) return;
+                    e.stopPropagation();
+                    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                    setAvatarPopup({ userId: chat.userId, name: chat.name, username: chat.username, avatar_url: chat.avatar_url, color: chat.color, x: rect.right + 8, y: rect.top });
+                  }} style={{ width: 46, height: 46, borderRadius: "50%", background: chat.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: chat.saved ? 18 : 13, fontWeight: 700, color: "#fff", overflow: "hidden", cursor: chat.userId ? "pointer" : "default" }}>
+                    {chat.avatar_url ? <img src={chat.avatar_url} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : chat.avatar}
                   </div>
-                  {onlineUsers.has(chat.userId || "") && (
-                    <div style={{ position: "absolute", bottom: 1, right: 1, width: 11, height: 11, background: "#22c55e", borderRadius: "50%", border: "2px solid #0f1525" }} />
-                  )}
+                  {onlineUsers.has(chat.userId || "") && <div style={{ position: "absolute", bottom: 1, right: 1, width: 11, height: 11, background: "#22c55e", borderRadius: "50%", border: "2px solid #0f1525" }} />}
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
-                    <span style={{ fontSize: 14, fontWeight: 600, color: "#ffffff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "65%" }}>{chat.name}</span>
+                    <span style={{ fontSize: 14, fontWeight: 600, color: "#fff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "65%" }}>{chat.name}</span>
                     <span style={{ fontSize: 11, color: chat.unread > 0 ? "#60a5fa" : "rgba(255,255,255,0.35)", flexShrink: 0 }}>{chat.time}</span>
                   </div>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -672,12 +617,7 @@ export default function JugalbandiApp() {
           </div>
 
           <div style={{ padding: "10px 14px", borderTop: "1px solid rgba(255,255,255,0.07)", display: "flex", gap: 4, flexShrink: 0 }}>
-            {[
-              { icon: <Edit size={16} />, active: true },
-              { icon: <Users size={16} /> },
-              { icon: <Zap size={16} />, link: "/ai" },
-              { icon: <Star size={16} /> },
-            ].map((item, i) => (
+            {[{ icon: <Edit size={16} />, active: true }, { icon: <Users size={16} /> }, { icon: <Zap size={16} />, link: "/ai" }, { icon: <Star size={16} /> }].map((item, i) => (
               <div key={i} onClick={() => { if ((item as any).link) window.location.href = (item as any).link; }}
                 style={{ flex: 1, height: 34, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", background: item.active ? "rgba(26,111,255,0.2)" : "transparent", color: item.active ? "#60a5fa" : "rgba(255,255,255,0.35)" }}>
                 {item.icon}
@@ -688,66 +628,51 @@ export default function JugalbandiApp() {
 
         {/* CHAT AREA */}
         <div className={`chat-area${!showChat ? " slide-out" : ""}`} style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
-          {activeChat ? (
+
+          {/* Profile Panel - replaces chat on desktop, full screen on mobile */}
+          {profilePanel ? ProfilePanelContent : activeChat ? (
             <>
               {/* Chat Header */}
               <div style={{ padding: "10px 14px", borderBottom: "1px solid rgba(255,255,255,0.07)", display: "flex", alignItems: "center", gap: 10, background: "#0f1525", flexShrink: 0 }}>
                 <button className="icon-btn" onClick={backToList}><ArrowLeft size={17} /></button>
-                {/* Avatar — clickable for profile */}
-                <div onClick={() => activeChat.userId && openViewProfile(activeChat.userId)} style={{ position: "relative", cursor: activeChat.userId ? "pointer" : "default" }}>
+                <div onClick={() => activeChat.userId && openProfilePanel(activeChat.userId)} style={{ position: "relative", cursor: activeChat.userId ? "pointer" : "default", flexShrink: 0 }}>
                   <div style={{ width: 38, height: 38, borderRadius: "50%", background: activeChat.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: activeChat.saved ? 16 : 13, fontWeight: 700, color: "#fff", overflow: "hidden" }}>
-                    {activeChat.avatar_url
-                      ? <img src={activeChat.avatar_url} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                      : activeChat.avatar}
+                    {activeChat.avatar_url ? <img src={activeChat.avatar_url} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : activeChat.avatar}
                   </div>
-                  {onlineUsers.has(activeChat.userId || "") && (
-                    <div style={{ position: "absolute", bottom: 0, right: 0, width: 9, height: 9, background: "#22c55e", borderRadius: "50%", border: "2px solid #0f1525" }} />
-                  )}
+                  {onlineUsers.has(activeChat.userId || "") && <div style={{ position: "absolute", bottom: 0, right: 0, width: 9, height: 9, background: "#22c55e", borderRadius: "50%", border: "2px solid #0f1525" }} />}
                 </div>
-                {/* Name + status — clickable for profile */}
-                <div onClick={() => activeChat.userId && openViewProfile(activeChat.userId)} style={{ flex: 1, minWidth: 0, cursor: activeChat.userId ? "pointer" : "default" }}>
-                  <div style={{ fontSize: 15, fontWeight: 700, color: "#ffffff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{activeChat.name}</div>
+                <div onClick={() => activeChat.userId && openProfilePanel(activeChat.userId)} style={{ flex: 1, minWidth: 0, cursor: activeChat.userId ? "pointer" : "default", overflow: "hidden" }}>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: "#fff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{activeChat.name}</div>
                   <div style={{ fontSize: 11, color: activeChat.saved ? "#60a5fa" : typingUsers.has(activeChat.userId || "") ? "#22c55e" : onlineUsers.has(activeChat.userId || "") ? "#22c55e" : "rgba(255,255,255,0.4)" }}>
-                    {activeChat.saved ? "Your personal space"
-                      : typingUsers.has(activeChat.userId || "") ? "typing..."
-                      : onlineUsers.has(activeChat.userId || "") ? "● Online"
-                      : chatUserLastSeen
-                      ? timeAgo(chatUserLastSeen) === "recently" ? "Last seen recently" : `Last seen ${timeAgo(chatUserLastSeen)} ago`
-                      : `@${activeChat.username}`}
+                    {activeChat.saved ? "Your personal space" : typingUsers.has(activeChat.userId || "") ? "typing..." : onlineUsers.has(activeChat.userId || "") ? "● Online" : chatUserLastSeen ? lastSeenText(chatUserLastSeen) : `@${activeChat.username}`}
                   </div>
                 </div>
-                {/* Action buttons */}
                 <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
-                  {!activeChat.saved && (
-                    <>
-                      <button className="icon-btn"><Phone size={15} /></button>
-                      <button className="icon-btn"><Video size={15} /></button>
-                    </>
-                  )}
-                  {/* 3-dot menu */}
+                  {!activeChat.saved && (<><button className="icon-btn"><Phone size={15} /></button><button className="icon-btn"><Video size={15} /></button></>)}
                   <div style={{ position: "relative" }}>
-                    <button className="icon-btn" onClick={() => setShowMenu(m => !m)}><MoreVertical size={15} /></button>
+                    <button className="icon-btn" onClick={e => { e.stopPropagation(); setShowMenu(m => !m); }}><MoreVertical size={15} /></button>
                     {showMenu && (
-                      <div onClick={() => setShowMenu(false)} style={{ position: "absolute", top: 40, right: 0, background: "#1a2236", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 12, padding: "6px 0", minWidth: 160, zIndex: 100, boxShadow: "0 8px 32px rgba(0,0,0,0.4)" }}>
+                      <div onClick={e => e.stopPropagation()} style={{ position: "absolute", top: 40, right: 0, background: "#1a2236", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 12, padding: "6px 0", minWidth: 170, zIndex: 100, boxShadow: "0 8px 32px rgba(0,0,0,0.4)" }}>
                         {activeChat.userId && (
-                          <div onClick={() => { setShowMenu(false); openViewProfile(activeChat.userId!); }}
+                          <div onClick={() => { setShowMenu(false); openProfilePanel(activeChat.userId!); }}
                             style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", cursor: "pointer", color: "rgba(255,255,255,0.8)", fontSize: 13 }}
                             onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.06)")}
                             onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
-                            <Info size={15} style={{ color: "#60a5fa" }} /> View Profile
+                            <Info size={14} style={{ color: "#60a5fa" }} /> View Profile
                           </div>
                         )}
                         <div onClick={() => { setShowMenu(false); window.location.href = "/profile"; }}
                           style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", cursor: "pointer", color: "rgba(255,255,255,0.8)", fontSize: 13 }}
                           onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.06)")}
                           onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
-                          <Edit size={15} style={{ color: "#60a5fa" }} /> Edit My Profile
+                          <Edit size={14} style={{ color: "#60a5fa" }} /> Edit My Profile
                         </div>
+                        <div style={{ height: 1, background: "rgba(255,255,255,0.06)", margin: "4px 0" }} />
                         <div onClick={() => { setShowMenu(false); setMessages([]); }}
                           style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", cursor: "pointer", color: "rgba(255,100,100,0.8)", fontSize: 13 }}
                           onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.06)")}
                           onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
-                          <X size={15} /> Clear Chat
+                          <X size={14} /> Clear Chat
                         </div>
                       </div>
                     )}
@@ -757,14 +682,14 @@ export default function JugalbandiApp() {
 
               {uploading && (
                 <div style={{ padding: "8px 16px", background: "rgba(26,111,255,0.1)", borderBottom: "1px solid rgba(26,111,255,0.2)", display: "flex", alignItems: "center", gap: 10 }}>
-                  <div style={{ flex: 1, height: 4, background: "rgba(255,255,255,0.1)", borderRadius: 999, overflow: "hidden" }}>
+                  <div style={{ flex: 1, height: 4, background: "rgba(255,255,255,0.1)", borderRadius: 999 }}>
                     <div style={{ height: "100%", background: "#1a6fff", borderRadius: 999, width: "60%" }} />
                   </div>
                   <span style={{ fontSize: 12, color: "#60a5fa" }}>Uploading...</span>
                 </div>
               )}
 
-              <div style={{ flex: 1, overflowY: "auto", padding: "16px 16px 8px", display: "flex", flexDirection: "column", gap: 6 }} onClick={() => setShowMenu(false)}>
+              <div style={{ flex: 1, overflowY: "auto", padding: "16px 16px 8px", display: "flex", flexDirection: "column", gap: 6 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "4px 0 10px" }}>
                   <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.06)" }} />
                   <span style={{ fontSize: 11, color: "rgba(255,255,255,0.35)", padding: "2px 10px", background: "rgba(255,255,255,0.04)", borderRadius: 999 }}>Today</span>
@@ -777,9 +702,7 @@ export default function JugalbandiApp() {
                     </div>
                     <div style={{ textAlign: "center", lineHeight: 1.7 }}>
                       <div style={{ fontSize: 15, fontWeight: 600, color: "rgba(255,255,255,0.6)", marginBottom: 4 }}>{activeChat.name}</div>
-                      <div style={{ fontSize: 13, color: "rgba(255,255,255,0.35)" }}>
-                        {activeChat.saved ? "Send yourself notes, files, or reminders." : `Start a conversation with ${activeChat.name}`}
-                      </div>
+                      <div style={{ fontSize: 13, color: "rgba(255,255,255,0.35)" }}>{activeChat.saved ? "Send yourself notes, files, or reminders." : `Start a conversation with ${activeChat.name}`}</div>
                     </div>
                   </div>
                 )}
@@ -789,18 +712,12 @@ export default function JugalbandiApp() {
                   return (
                     <div key={msg.id} className="msg-in" style={{ display: "flex", justifyContent: isSent ? "flex-end" : "flex-start" }}>
                       <div style={{ maxWidth: "75%" }}>
-                        <div style={{ padding: msg.file_url ? "6px" : "10px 14px", borderRadius: isSent ? "18px 18px 4px 18px" : "18px 18px 18px 4px", background: isSent ? "linear-gradient(135deg, #1a6fff, #0d4fd9)" : "rgba(20,26,44,1)", border: isSent ? "none" : "1px solid rgba(255,255,255,0.09)", color: "#ffffff", fontSize: 14, lineHeight: 1.55, wordBreak: "break-word" }}>
+                        <div style={{ padding: msg.file_url ? "6px" : "10px 14px", borderRadius: isSent ? "18px 18px 4px 18px" : "18px 18px 18px 4px", background: isSent ? "linear-gradient(135deg, #1a6fff, #0d4fd9)" : "rgba(20,26,44,1)", border: isSent ? "none" : "1px solid rgba(255,255,255,0.09)", color: "#fff", fontSize: 14, lineHeight: 1.55, wordBreak: "break-word" }}>
                           {msg.file_url ? renderFileMessage(msg) : msg.content}
                         </div>
                         <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 3, justifyContent: isSent ? "flex-end" : "flex-start" }}>
                           <span style={{ fontSize: 11, color: "rgba(255,255,255,0.35)" }}>{time}</span>
-                          {isSent && (
-                            msg.is_read
-                              ? <CheckCheck size={12} style={{ color: "#60a5fa" }} />
-                              : (msg.is_delivered || onlineUsers.has(activeChat?.userId || ""))
-                              ? <CheckCheck size={12} style={{ color: "rgba(255,255,255,0.4)" }} />
-                              : <Check size={12} style={{ color: "rgba(255,255,255,0.4)" }} />
-                          )}
+                          {isSent && (msg.is_read ? <CheckCheck size={12} style={{ color: "#60a5fa" }} /> : (msg.is_delivered || onlineUsers.has(activeChat?.userId || "")) ? <CheckCheck size={12} style={{ color: "rgba(255,255,255,0.4)" }} /> : <Check size={12} style={{ color: "rgba(255,255,255,0.4)" }} />)}
                         </div>
                       </div>
                     </div>
@@ -811,7 +728,7 @@ export default function JugalbandiApp() {
 
               <div style={{ padding: "10px 12px", borderTop: "1px solid rgba(255,255,255,0.07)", background: "#0f1525", flexShrink: 0 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 14, padding: "7px 10px" }}>
-                  <Smile size={20} style={{ color: "rgba(255,255,255,0.4)", cursor: "pointer", flexShrink: 0 }} />
+                  <Smile size={20} style={{ color: "rgba(255,255,255,0.4)", flexShrink: 0 }} />
                   <input ref={inputRef} value={message} onChange={e => {
                     setMessage(e.target.value);
                     if (!user || !activeChat?.userId) return;
@@ -819,19 +736,13 @@ export default function JugalbandiApp() {
                   }}
                     onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
                     placeholder={activeChat.saved ? "Write a note to yourself..." : `Message ${activeChat.name}...`}
-                    style={{ flex: 1, background: "transparent", border: "none", color: "#ffffff", fontSize: 14, padding: "3px 0", minWidth: 0 }} />
+                    style={{ flex: 1, background: "transparent", border: "none", color: "#fff", fontSize: 14, padding: "3px 0", minWidth: 0 }} />
                   <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
                     <input ref={fileInputRef} type="file" accept="*/*" onChange={handleFileSelect} style={{ display: "none" }} />
                     <Paperclip size={18} style={{ color: uploading ? "#60a5fa" : "rgba(255,255,255,0.4)", cursor: "pointer" }} onClick={() => fileInputRef.current?.click()} />
-                    {message.trim() ? (
-                      <div onClick={sendMessage} style={{ width: 36, height: 36, borderRadius: 11, background: sending ? "rgba(26,111,255,0.5)" : "linear-gradient(135deg, #1a6fff, #0d4fd9)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
-                        <Send size={16} style={{ color: "#fff" }} />
-                      </div>
-                    ) : (
-                      <div style={{ width: 36, height: 36, borderRadius: 11, background: "rgba(26,111,255,0.15)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
-                        <Mic size={16} style={{ color: "#60a5fa" }} />
-                      </div>
-                    )}
+                    {message.trim()
+                      ? <div onClick={sendMessage} style={{ width: 36, height: 36, borderRadius: 11, background: sending ? "rgba(26,111,255,0.5)" : "linear-gradient(135deg, #1a6fff, #0d4fd9)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}><Send size={16} style={{ color: "#fff" }} /></div>
+                      : <div style={{ width: 36, height: 36, borderRadius: 11, background: "rgba(26,111,255,0.15)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}><Mic size={16} style={{ color: "#60a5fa" }} /></div>}
                   </div>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 5, marginTop: 6 }}>
@@ -842,7 +753,7 @@ export default function JugalbandiApp() {
             </>
           ) : (
             <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 18 }}>
-              <img src="/icon-512.png" alt="Jugalbandi" style={{ width: 88, height: 88, borderRadius: 26 }} />
+              <img src="/icon-512.png" style={{ width: 88, height: 88, borderRadius: 26 }} />
               <div style={{ textAlign: "center" }}>
                 <div style={{ fontSize: 22, fontWeight: 700, color: "rgba(255,255,255,0.7)", marginBottom: 8 }}>Welcome, {profile?.full_name?.split(" ")[0] || "there"}!</div>
                 <div style={{ fontSize: 14, color: "rgba(255,255,255,0.3)", lineHeight: 1.7, marginBottom: 20 }}>Select a conversation or start a new one.</div>
