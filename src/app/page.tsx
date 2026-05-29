@@ -23,6 +23,7 @@ type Profile = {
   full_name: string;
   username: string;
   avatar_url?: string;
+  last_seen?: string;
 };
 
 type Conversation = {
@@ -69,17 +70,21 @@ export default function JugalbandiApp() {
   const [searchResults, setSearchResults] = useState<Profile[]>([]);
   const [searching, setSearching] = useState(false);
 const [onlineUsers, setOnlineUsers] = useState<Set<string>>(new Set());
+const [chatUserLastSeen, setChatUserLastSeen] = useState<string | null>(null);
 const messagesEndRef = useRef<HTMLDivElement>(null);
 const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (!session) { window.location.href = "/auth"; return; }
-      setUser(session.user);
-      fetchProfile(session.user.id);
-      setLoading(false);
-    });
-  }, []);
+    if (activeChat && user) {
+      fetchMessages(user.id, activeChat.saved ? "saved" : activeChat.userId!);
+      if (activeChat.userId) {
+        supabase.from("profiles").select("last_seen").eq("id", activeChat.userId).single()
+          .then(({ data }) => { if (data) setChatUserLastSeen(data.last_seen); });
+      } else {
+        setChatUserLastSeen(null);
+      }
+    }
+  }, [activeChat]);
 
   async function fetchProfile(userId: string) {
     const { data } = await supabase.from("profiles").select("*").eq("id", userId).single();
@@ -535,8 +540,14 @@ const inputRef = useRef<HTMLInputElement>(null);
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 15, fontWeight: 700, color: "#ffffff" }}>{activeChat.name}</div>
-                  <div style={{ fontSize: 11, color: activeChat.saved ? "#60a5fa" : "rgba(255,255,255,0.4)" }}>
-                    {activeChat.saved ? "Your personal space" : `@${activeChat.username}`}
+                  <div style={{ fontSize: 11, color: activeChat.saved ? "#60a5fa" : onlineUsers.has(activeChat.userId || "") ? "#22c55e" : "rgba(255,255,255,0.4)" }}>
+                    {activeChat.saved
+                      ? "Your personal space"
+                      : onlineUsers.has(activeChat.userId || "")
+                      ? "● Online"
+                      : chatUserLastSeen
+                      ? `Last seen ${timeAgo(chatUserLastSeen)} ago`
+                      : `@${activeChat.username}`}
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: 4 }}>
