@@ -1,10 +1,16 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
 import { Eye, EyeOff, Mail, Lock, User, ArrowRight, Zap, Shield, MessageCircle } from "lucide-react";
 
 export default function AuthPage() {
   const [mode, setMode] = useState<"login" | "signup">("login");
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session) window.location.replace("/");
+    });
+  }, []);
   const [loading, setLoading] = useState(false);
   const [showPass, setShowPass] = useState(false);
   const [error, setError] = useState("");
@@ -17,7 +23,7 @@ export default function AuthPage() {
     if (mode === "login") {
       const { error } = await supabase.auth.signInWithPassword({ email: form.email, password: form.password });
       if (error) setError(error.message);
-      else window.location.href = "/";
+      else window.location.replace("/");
     } else {
       if (!form.username || !form.full_name) { setError("Please fill all fields."); setLoading(false); return; }
       const { data, error } = await supabase.auth.signUp({ email: form.email, password: form.password });

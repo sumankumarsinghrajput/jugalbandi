@@ -86,12 +86,6 @@ const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
       setUser(session.user);
       setLoading(false);
 
-// Prevent back button from navigating away on mobile
-window.history.pushState(null, "", window.location.href);
-window.addEventListener("popstate", () => {
-  window.history.pushState(null, "", window.location.href);
-});
-
       supabase.from("profiles").select("*").eq("id", session.user.id).single()
         .then(({ data }) => { if (data) setProfile(data); });
 
