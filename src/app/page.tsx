@@ -7,7 +7,7 @@ import {
   Users, Star, Zap,
   Check, CheckCheck, Shield, LogOut, ArrowLeft, UserPlus, X,
   FileText, Film, Music, Archive, Download, Image, Info,
-  MessageCircle, CornerUpLeft, Ban, BellOff,
+  MessageCircle, CornerUpLeft, Ban, ChevronUp, ChevronDown,
 } from "lucide-react";
 
 type Message = {
@@ -126,6 +126,21 @@ function Avatar({ url, initials, color, size }: { url?: string; initials: string
   );
 }
 
+function HighlightText({ text, query }: { text: string; query: string }) {
+  if (!query.trim() || !text) return <>{text}</>;
+  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const parts = text.split(new RegExp(`(${escaped})`, 'gi'));
+  return (
+    <>
+      {parts.map((part, i) =>
+        part.toLowerCase() === query.toLowerCase()
+          ? <mark key={i} style={{ background: "rgba(255,210,0,0.45)", color: "#fff", borderRadius: 2, padding: "0 1px" }}>{part}</mark>
+          : <span key={i}>{part}</span>
+      )}
+    </>
+  );
+}
+
 export default function JugalbandiApp() {
   const [user, setUser] = useState<any>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -160,6 +175,8 @@ export default function JugalbandiApp() {
   const [blockedUsers, setBlockedUsers] = useState<Set<string>>(new Set());
   const [showChatSearch, setShowChatSearch] = useState(false);
   const [chatSearchQuery, setChatSearchQuery] = useState("");
+  const [searchMatches, setSearchMatches] = useState<string[]>([]);
+  const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
   const [sharedMedia, setSharedMedia] = useState<string[]>([]);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -172,6 +189,7 @@ export default function JugalbandiApp() {
   const touchStartY = useRef(0);
   const touchMsgRef = useRef<Message | null>(null);
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const messageRefs = useRef<Record<string, HTMLDivElement>>({});
 
   // AUTH
   useEffect(() => {
@@ -187,11 +205,8 @@ export default function JugalbandiApp() {
       lastSeenFn();
       interval = setInterval(lastSeenFn, 30000);
       window.addEventListener("beforeunload", lastSeenFn);
-      // Load blocked users
       supabase.from("blocked_users").select("blocked_id").eq("blocker_id", session.user.id)
-        .then(({ data }) => {
-          if (data) setBlockedUsers(new Set(data.map(b => b.blocked_id)));
-        });
+        .then(({ data }) => { if (data) setBlockedUsers(new Set(data.map((b: any) => b.blocked_id))); });
     }).catch(() => { window.location.href = "/auth"; });
     return () => { clearInterval(interval); if (lastSeenFn) window.removeEventListener("beforeunload", lastSeenFn); };
   }, []);
@@ -209,6 +224,29 @@ export default function JugalbandiApp() {
       } else { setChatUserLastSeen(null); }
     }
   }, [activeChat?.id]);
+
+  // Search matches update
+  useEffect(() => {
+    if (!chatSearchQuery.trim()) {
+      setSearchMatches([]); setCurrentMatchIndex(0); return;
+    }
+    const q = chatSearchQuery.toLowerCase();
+    const matches = messages
+      .filter(m => m.content?.toLowerCase().includes(q) || m.file_name?.toLowerCase().includes(q))
+      .map(m => m.id);
+    setSearchMatches(matches);
+    setCurrentMatchIndex(0);
+    if (matches.length > 0) {
+      setTimeout(() => messageRefs.current[matches[0]]?.scrollIntoView({ behavior: "smooth", block: "center" }), 150);
+    }
+  }, [chatSearchQuery, messages]);
+
+  function navigateMatch(dir: 1 | -1) {
+    if (searchMatches.length === 0) return;
+    const newIdx = (currentMatchIndex + dir + searchMatches.length) % searchMatches.length;
+    setCurrentMatchIndex(newIdx);
+    messageRefs.current[searchMatches[newIdx]]?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
 
   async function fetchConversations(userId: string) {
     const { data } = await supabase
@@ -323,7 +361,7 @@ export default function JugalbandiApp() {
   useEffect(() => {
     if (messages.length === 0) return;
     if (isInitialLoad.current) { messagesEndRef.current?.scrollIntoView({ behavior: "auto" }); isInitialLoad.current = false; }
-    else messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    else if (!chatSearchQuery) messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
   useEffect(() => {
@@ -345,8 +383,7 @@ export default function JugalbandiApp() {
       if (touchMsgRef.current && !msg.id.startsWith("optimistic-")) {
         setMobileLongPressReaction(msg.id);
         if (navigator.vibrate) navigator.vibrate(50);
-        touchMsgRef.current = null;
-        setSwipingMsgId(null); setSwipeOffset(0);
+        touchMsgRef.current = null; setSwipingMsgId(null); setSwipeOffset(0);
       }
     }, 500);
   }
@@ -379,30 +416,29 @@ export default function JugalbandiApp() {
     const hasReacted = users.includes(user.id);
     if (hasReacted) {
       const newUsers = users.filter(id => id !== user.id);
-      if (newUsers.length === 0) delete reactions[emoji];
-      else reactions[emoji] = newUsers;
+      if (newUsers.length === 0) delete reactions[emoji]; else reactions[emoji] = newUsers;
     } else { reactions[emoji] = [...users, user.id]; }
     setMessages(prev => prev.map(m => m.id === messageId ? { ...m, reactions } : m));
     await supabase.from("messages").update({ reactions }).eq("id", messageId);
   }
 
-  // CLEAR CHAT — actually deletes from DB
+  // CLEAR CHAT — deletes from DB
   async function clearChat() {
     if (!user || !activeChat) return;
-    const confirmed = window.confirm("Clear all messages in this chat? This cannot be undone.");
+    const confirmed = window.confirm("Clear all messages? This cannot be undone.");
     if (!confirmed) return;
     if (activeChat.saved) {
       await supabase.from("messages").delete().eq("sender_id", user.id).eq("receiver_id", user.id);
     } else {
-      await supabase.from("messages")
-        .delete()
+      await supabase.from("messages").delete()
         .or(`and(sender_id.eq.${user.id},receiver_id.eq.${activeChat.userId}),and(sender_id.eq.${activeChat.userId},receiver_id.eq.${user.id})`);
     }
     setMessages([]);
     fetchConversations(user.id);
   }
 
-  // BLOCK/UNBLOCK
+  // BLOCK — only blocks the other user from sending to you (server-side)
+  // Locally just tracks who you blocked
   async function toggleBlock(userId: string) {
     if (blockedUsers.has(userId)) {
       await supabase.from("blocked_users").delete().eq("blocker_id", user.id).eq("blocked_id", userId);
@@ -411,20 +447,14 @@ export default function JugalbandiApp() {
       await supabase.from("blocked_users").insert({ blocker_id: user.id, blocked_id: userId });
       setBlockedUsers(prev => new Set(prev).add(userId));
     }
-    setProfilePanel(prev => prev ? { ...prev } : null);
   }
 
-  // LOAD SHARED MEDIA for profile panel
   async function loadSharedMedia(userId: string) {
     if (!user) return;
     const { data } = await supabase.from("messages").select("file_url, file_type")
       .or(`and(sender_id.eq.${user.id},receiver_id.eq.${userId}),and(sender_id.eq.${userId},receiver_id.eq.${user.id})`)
-      .not("file_url", "is", null)
-      .order("created_at", { ascending: false }).limit(12);
-    if (data) {
-      const images = data.filter(m => m.file_type?.startsWith("image/")).map(m => m.file_url);
-      setSharedMedia(images);
-    }
+      .not("file_url", "is", null).order("created_at", { ascending: false }).limit(12);
+    if (data) setSharedMedia(data.filter(m => m.file_type?.startsWith("image/")).map(m => m.file_url));
   }
 
   async function uploadFile(file: File) {
@@ -531,16 +561,30 @@ export default function JugalbandiApp() {
 
   function backToList() { setShowChat(false); setActiveChat(null); setMessages([]); setProfilePanel(null); setReplyTo(null); setShowChatSearch(false); setChatSearchQuery(""); }
 
+  // Navigate to a chat from profile panel — fix: if same chat open, just close panel
+  function goToChat(userId: string) {
+    const conv = conversations.find(c => c.userId === userId);
+    if (conv) {
+      if (activeChat?.id === conv.id) {
+        // Already in this chat — just close the profile panel, don't reset messages
+        setProfilePanel(null);
+      } else {
+        openChat(conv);
+      }
+    } else if (profilePanel) {
+      // Create new conversation entry
+      const nc: Conversation = { id: profilePanel.id, name: profilePanel.name, username: profilePanel.username, avatar: getInitials(profilePanel.name), avatar_url: profilePanel.avatar_url, color: profilePanel.color, lastMsg: "", time: "", unread: 0, online: false, userId: profilePanel.id };
+      setActiveChat(nc); setShowChat(true); setMessages([]); setProfilePanel(null);
+      setConversations(prev => { const f = prev.filter(c => c.id !== nc.id); const s = f.find(c => c.saved); const r = f.filter(c => !c.saved); return s ? [s, nc, ...r] : [nc, ...r]; });
+    }
+  }
+
   const myInitials = profile?.full_name ? getInitials(profile.full_name) : "U";
   const filteredConvs = conversations.filter(c => c.name.toLowerCase().includes(search.toLowerCase()) || c.username.toLowerCase().includes(search.toLowerCase()));
-  const displayedMessages = chatSearchQuery.trim()
-    ? messages.filter(m => m.content?.toLowerCase().includes(chatSearchQuery.toLowerCase()) || m.file_name?.toLowerCase().includes(chatSearchQuery.toLowerCase()))
-    : messages;
 
   // WhatsApp-style Profile Panel
   const ProfilePanelContent = profilePanel ? (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", height: "100%", background: "#0a0e1a", overflowY: "auto" }}>
-      {/* Cover area */}
       <div style={{ position: "relative", background: `linear-gradient(160deg, ${profilePanel.color}cc 0%, #0a0e1a 70%)`, padding: "56px 20px 24px", flexShrink: 0 }}>
         <button onClick={() => setProfilePanel(null)} style={{ position: "absolute", top: 12, left: 12, width: 36, height: 36, borderRadius: "50%", background: "rgba(0,0,0,0.3)", border: "none", color: "#fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
           <ArrowLeft size={18} />
@@ -553,25 +597,15 @@ export default function JugalbandiApp() {
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: 20, fontWeight: 700, color: "#fff", marginBottom: 2 }}>{profilePanel.name}</div>
             <div style={{ fontSize: 13, color: "rgba(255,255,255,0.6)", marginBottom: 4 }}>@{profilePanel.username}</div>
-            {profilePanel.online
-              ? <div style={{ fontSize: 12, color: "#22c55e" }}>● Online</div>
+            {profilePanel.online ? <div style={{ fontSize: 12, color: "#22c55e" }}>● Online</div>
               : profilePanel.last_seen ? <div style={{ fontSize: 12, color: "rgba(255,255,255,0.4)" }}>{lastSeenText(profilePanel.last_seen)}</div> : null}
           </div>
         </div>
       </div>
 
-      {/* Quick actions */}
       {profilePanel.id !== user?.id && (
         <div style={{ display: "flex", gap: 10, padding: "16px 16px 8px" }}>
-          <button onClick={() => {
-            const conv = conversations.find(c => c.userId === profilePanel.id);
-            if (conv) { openChat(conv); } else {
-              const nc: Conversation = { id: profilePanel.id, name: profilePanel.name, username: profilePanel.username, avatar: getInitials(profilePanel.name), avatar_url: profilePanel.avatar_url, color: profilePanel.color, lastMsg: "", time: "", unread: 0, online: false, userId: profilePanel.id };
-              setActiveChat(nc); setShowChat(true); setMessages([]);
-              setConversations(prev => { const f = prev.filter(c => c.id !== profilePanel.id); const s = f.find(c => c.saved); const r = f.filter(c => !c.saved); return s ? [s, nc, ...r] : [nc, ...r]; });
-            }
-            setProfilePanel(null);
-          }} style={{ flex: 1, padding: "10px 6px", background: "rgba(26,111,255,0.15)", border: "1px solid rgba(26,111,255,0.3)", borderRadius: 12, color: "#60a5fa", fontSize: 12, fontWeight: 600, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+          <button onClick={() => goToChat(profilePanel.id)} style={{ flex: 1, padding: "10px 6px", background: "rgba(26,111,255,0.15)", border: "1px solid rgba(26,111,255,0.3)", borderRadius: 12, color: "#60a5fa", fontSize: 12, fontWeight: 600, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
             <MessageCircle size={18} /><span>Message</span>
           </button>
           <button style={{ flex: 1, padding: "10px 6px", background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 12, color: "rgba(255,255,255,0.5)", fontSize: 12, fontWeight: 600, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
@@ -588,7 +622,6 @@ export default function JugalbandiApp() {
       )}
 
       <div style={{ display: "flex", flexDirection: "column", gap: 10, padding: "8px 16px 24px" }}>
-        {/* About */}
         {profilePanel.bio && (
           <div style={{ background: "rgba(255,255,255,0.04)", borderRadius: 14, padding: "14px 16px", border: "1px solid rgba(255,255,255,0.07)" }}>
             <div style={{ fontSize: 11, color: "#60a5fa", fontWeight: 600, marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.8 }}>About</div>
@@ -596,7 +629,6 @@ export default function JugalbandiApp() {
           </div>
         )}
 
-        {/* Shared Media */}
         {sharedMedia.length > 0 && (
           <div style={{ background: "rgba(255,255,255,0.04)", borderRadius: 14, padding: "14px 16px", border: "1px solid rgba(255,255,255,0.07)" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
@@ -605,8 +637,7 @@ export default function JugalbandiApp() {
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 4, borderRadius: 10, overflow: "hidden" }}>
               {sharedMedia.slice(0, 6).map((url, i) => (
-                <div key={i} onClick={() => setLightboxImg(url)}
-                  style={{ aspectRatio: "1", background: "#1a2236", overflow: "hidden", cursor: "zoom-in", borderRadius: 6 }}>
+                <div key={i} onClick={() => setLightboxImg(url)} style={{ aspectRatio: "1", background: "#1a2236", overflow: "hidden", cursor: "zoom-in", borderRadius: 6 }}>
                   <img src={url} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
                 </div>
               ))}
@@ -614,15 +645,8 @@ export default function JugalbandiApp() {
           </div>
         )}
 
-        {/* Options */}
         {profilePanel.id !== user?.id && (
           <div style={{ background: "rgba(255,255,255,0.04)", borderRadius: 14, overflow: "hidden", border: "1px solid rgba(255,255,255,0.07)" }}>
-            <div onClick={() => {}} style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 16px", cursor: "pointer", borderBottom: "1px solid rgba(255,255,255,0.06)" }}
-              onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.04)")}
-              onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
-              <BellOff size={18} style={{ color: "rgba(255,255,255,0.5)" }} />
-              <span style={{ fontSize: 14, color: "rgba(255,255,255,0.8)" }}>Mute Notifications</span>
-            </div>
             <div onClick={() => toggleBlock(profilePanel.id)} style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 16px", cursor: "pointer" }}
               onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.04)")}
               onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
@@ -634,7 +658,6 @@ export default function JugalbandiApp() {
           </div>
         )}
 
-        {/* If own profile */}
         {profilePanel.id === user?.id && (
           <button onClick={() => { setProfilePanel(null); window.location.href = "/profile"; }}
             style={{ width: "100%", padding: "12px", background: "linear-gradient(135deg, #1a6fff, #0d4fd9)", border: "none", borderRadius: 14, color: "#fff", fontSize: 14, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
@@ -670,11 +693,12 @@ export default function JugalbandiApp() {
         .chat-item:hover { background: rgba(255,255,255,0.04); }
         .chat-item.active { background: rgba(26,111,255,0.12); border-left-color: #1a6fff; }
         @keyframes fadeUp { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes matchPulse { 0%,100% { box-shadow: 0 0 0 0 rgba(255,210,0,0); } 40% { box-shadow: 0 0 0 4px rgba(255,210,0,0.4); } }
         .msg-in { animation: fadeUp 0.2s ease forwards; }
+        .msg-current-match { animation: matchPulse 0.8s ease 0s 2; border-radius: 18px; }
         .msg-actions { display: flex; }
         .search-overlay { position: absolute; inset: 0; z-index: 50; background: #0f1525; display: flex; flex-direction: column; }
         .emoji-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 2px; }
-        .highlight { background: rgba(255,200,0,0.3); border-radius: 3px; }
         @media (max-width: 768px) {
           .sidebar { width: 100%; min-width: unset; position: absolute; inset: 0; z-index: 10; transition: transform 0.25s ease; }
           .sidebar.slide-out { transform: translateX(-100%); }
@@ -864,13 +888,13 @@ export default function JugalbandiApp() {
                             <Info size={14} style={{ color: "#60a5fa" }} /> View Profile
                           </div>
                         )}
-                        <div onClick={() => { setShowMenu(false); setShowChatSearch(true); setTimeout(() => chatSearchRef.current?.focus(), 100); }} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", cursor: "pointer", color: "rgba(255,255,255,0.8)", fontSize: 13 }} onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.06)")} onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+                        <div onClick={() => { setShowMenu(false); setShowChatSearch(s => !s); if (!showChatSearch) setTimeout(() => chatSearchRef.current?.focus(), 100); }} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", cursor: "pointer", color: "rgba(255,255,255,0.8)", fontSize: 13 }} onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.06)")} onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
                           <Search size={14} style={{ color: "#60a5fa" }} /> Search in Chat
                         </div>
                         {activeChat.userId && (
-                          <div onClick={() => { setShowMenu(false); toggleBlock(activeChat.userId!); }} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", cursor: "pointer", color: blockedUsers.has(activeChat.userId) ? "#22c55e" : "rgba(255,255,255,0.8)", fontSize: 13 }} onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.06)")} onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+                          <div onClick={() => { setShowMenu(false); toggleBlock(activeChat.userId!); }} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", cursor: "pointer", fontSize: 13 }} onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.06)")} onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
                             <Ban size={14} style={{ color: blockedUsers.has(activeChat.userId) ? "#22c55e" : "#ef4444" }} />
-                            {blockedUsers.has(activeChat.userId) ? "Unblock User" : "Block User"}
+                            <span style={{ color: blockedUsers.has(activeChat.userId) ? "#22c55e" : "rgba(255,255,255,0.8)" }}>{blockedUsers.has(activeChat.userId) ? "Unblock User" : "Block User"}</span>
                           </div>
                         )}
                         <div onClick={() => { setShowMenu(false); window.location.href = "/profile"; }} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", cursor: "pointer", color: "rgba(255,255,255,0.8)", fontSize: 13 }} onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.06)")} onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
@@ -890,10 +914,24 @@ export default function JugalbandiApp() {
               {showChatSearch && (
                 <div style={{ padding: "8px 12px", background: "#0f1525", borderBottom: "1px solid rgba(255,255,255,0.07)", display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
                   <Search size={15} style={{ color: "rgba(255,255,255,0.4)", flexShrink: 0 }} />
-                  <input ref={chatSearchRef} value={chatSearchQuery} onChange={e => setChatSearchQuery(e.target.value)} placeholder="Search in chat..."
+                  <input ref={chatSearchRef} value={chatSearchQuery} onChange={e => setChatSearchQuery(e.target.value)}
+                    onKeyDown={e => { if (e.key === "Enter") navigateMatch(1); if (e.key === "Escape") { setShowChatSearch(false); setChatSearchQuery(""); } }}
+                    placeholder="Search in chat..."
                     style={{ flex: 1, background: "transparent", border: "none", color: "#fff", fontSize: 14 }} />
-                  {chatSearchQuery && <span style={{ fontSize: 12, color: "rgba(255,255,255,0.4)" }}>{displayedMessages.length} result{displayedMessages.length !== 1 ? "s" : ""}</span>}
-                  <button onClick={() => { setShowChatSearch(false); setChatSearchQuery(""); }} style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,0.4)", display: "flex" }}><X size={15} /></button>
+                  {chatSearchQuery.trim() && (
+                    <>
+                      <span style={{ fontSize: 12, color: searchMatches.length > 0 ? "rgba(255,255,255,0.5)" : "#ef4444", flexShrink: 0, whiteSpace: "nowrap" }}>
+                        {searchMatches.length > 0 ? `${currentMatchIndex + 1} / ${searchMatches.length}` : "Not found"}
+                      </span>
+                      <button onClick={() => navigateMatch(-1)} disabled={searchMatches.length === 0} style={{ background: "none", border: "none", cursor: searchMatches.length > 0 ? "pointer" : "default", color: searchMatches.length > 0 ? "#60a5fa" : "rgba(255,255,255,0.2)", display: "flex", padding: 2 }}>
+                        <ChevronUp size={16} />
+                      </button>
+                      <button onClick={() => navigateMatch(1)} disabled={searchMatches.length === 0} style={{ background: "none", border: "none", cursor: searchMatches.length > 0 ? "pointer" : "default", color: searchMatches.length > 0 ? "#60a5fa" : "rgba(255,255,255,0.2)", display: "flex", padding: 2 }}>
+                        <ChevronDown size={16} />
+                      </button>
+                    </>
+                  )}
+                  <button onClick={() => { setShowChatSearch(false); setChatSearchQuery(""); setSearchMatches([]); }} style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,0.4)", display: "flex", padding: 2 }}><X size={15} /></button>
                 </div>
               )}
 
@@ -904,114 +942,105 @@ export default function JugalbandiApp() {
                 </div>
               )}
 
-              {/* Blocked banner */}
-              {activeChat.userId && blockedUsers.has(activeChat.userId) && (
-                <div style={{ padding: "10px 16px", background: "rgba(239,68,68,0.1)", borderBottom: "1px solid rgba(239,68,68,0.2)", display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0 }}>
-                  <span style={{ fontSize: 13, color: "#ef4444" }}>🚫 You have blocked this user</span>
-                  <button onClick={() => toggleBlock(activeChat.userId!)} style={{ fontSize: 12, color: "#ef4444", background: "none", border: "1px solid #ef4444", borderRadius: 8, padding: "3px 10px", cursor: "pointer" }}>Unblock</button>
-                </div>
-              )}
-
-              {/* Messages */}
+              {/* Messages — all visible, matches highlighted */}
               <div style={{ flex: 1, overflowY: "auto", padding: "16px 16px 8px", display: "flex", flexDirection: "column", gap: 4 }}>
-                {chatSearchQuery && displayedMessages.length === 0 ? (
-                  <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 10 }}>
-                    <Search size={32} style={{ color: "rgba(255,255,255,0.2)" }} />
-                    <div style={{ fontSize: 14, color: "rgba(255,255,255,0.4)" }}>No messages found for "{chatSearchQuery}"</div>
-                  </div>
-                ) : (
-                  <>
-                    <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "4px 0 10px" }}>
-                      <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.06)" }} />
-                      <span style={{ fontSize: 11, color: "rgba(255,255,255,0.35)", padding: "2px 10px", background: "rgba(255,255,255,0.04)", borderRadius: 999 }}>Today</span>
-                      <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.06)" }} />
-                    </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "4px 0 10px" }}>
+                  <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.06)" }} />
+                  <span style={{ fontSize: 11, color: "rgba(255,255,255,0.35)", padding: "2px 10px", background: "rgba(255,255,255,0.04)", borderRadius: 999 }}>Today</span>
+                  <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.06)" }} />
+                </div>
 
-                    {messages.length === 0 && !chatSearchQuery && (
-                      <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 14, paddingBottom: 60, paddingTop: 40 }}>
-                        <div style={{ width: 64, height: 64, borderRadius: "50%", background: `${activeChat.color}22`, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                          <span style={{ fontSize: 28 }}>{activeChat.saved ? "★" : "💬"}</span>
-                        </div>
-                        <div style={{ textAlign: "center", lineHeight: 1.7 }}>
-                          <div style={{ fontSize: 15, fontWeight: 600, color: "rgba(255,255,255,0.6)", marginBottom: 4 }}>{activeChat.name}</div>
-                          <div style={{ fontSize: 13, color: "rgba(255,255,255,0.35)" }}>{activeChat.saved ? "Send yourself notes, files, or reminders." : `Start a conversation with ${activeChat.name}`}</div>
+                {messages.length === 0 && (
+                  <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 14, paddingBottom: 60, paddingTop: 40 }}>
+                    <div style={{ width: 64, height: 64, borderRadius: "50%", background: `${activeChat.color}22`, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      <span style={{ fontSize: 28 }}>{activeChat.saved ? "★" : "💬"}</span>
+                    </div>
+                    <div style={{ textAlign: "center", lineHeight: 1.7 }}>
+                      <div style={{ fontSize: 15, fontWeight: 600, color: "rgba(255,255,255,0.6)", marginBottom: 4 }}>{activeChat.name}</div>
+                      <div style={{ fontSize: 13, color: "rgba(255,255,255,0.35)" }}>{activeChat.saved ? "Send yourself notes, files, or reminders." : `Start a conversation with ${activeChat.name}`}</div>
+                    </div>
+                  </div>
+                )}
+
+                {messages.map((msg) => {
+                  const isSent = msg.sender_id === user?.id;
+                  const time = new Date(msg.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+                  const isSwipingThis = swipingMsgId === msg.id;
+                  const hasReactions = msg.reactions && Object.keys(msg.reactions).length > 0;
+                  const showActions = hoveredMsgId === msg.id && !msg.id.startsWith("optimistic-");
+                  const isMatch = chatSearchQuery.trim() && searchMatches.includes(msg.id);
+                  const isCurrentMatch = searchMatches[currentMatchIndex] === msg.id;
+
+                  return (
+                    <div key={msg.id} className="msg-in" style={{ marginBottom: hasReactions ? 24 : 2 }}
+                      ref={el => { if (el) messageRefs.current[msg.id] = el; }}
+                      onMouseEnter={() => setHoveredMsgId(msg.id)}
+                      onMouseLeave={() => setHoveredMsgId(null)}>
+                      <div style={{ display: "flex", justifyContent: isSent ? "flex-end" : "flex-start" }}>
+                        <div onTouchStart={e => handleTouchStart(e, msg)} onTouchMove={handleTouchMove} onTouchEnd={handleTouchEnd}
+                          className={isCurrentMatch ? "msg-current-match" : ""}
+                          style={{ maxWidth: "75%", transform: isSwipingThis ? `translateX(${Math.min(swipeOffset, 80)}px)` : "translateX(0)", transition: isSwipingThis ? "none" : "transform 0.2s ease", position: "relative", outline: isMatch && !isCurrentMatch ? "1px solid rgba(255,210,0,0.3)" : "none", borderRadius: 18 }}>
+
+                          {!msg.id.startsWith("optimistic-") && (
+                            <div className="msg-actions" style={{ position: "absolute", [isSent ? "right" : "left"]: "calc(100% + 6px)", bottom: 18, display: "flex", flexDirection: "column", gap: 4, zIndex: 10, opacity: showActions ? 1 : 0, pointerEvents: showActions ? "auto" : "none", transition: "opacity 0.15s" }}>
+                              <button onClick={e => { e.stopPropagation(); setReactionPickerMsgId(prev => prev === msg.id ? null : msg.id); }} style={{ width: 28, height: 28, borderRadius: "50%", background: "rgba(255,255,255,0.1)", border: "none", cursor: "pointer", fontSize: 15, display: "flex", alignItems: "center", justifyContent: "center" }}>😊</button>
+                              <button onClick={() => { setReplyTo(msg); inputRef.current?.focus(); }} style={{ width: 28, height: 28, borderRadius: "50%", background: "rgba(255,255,255,0.1)", border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                                <CornerUpLeft size={13} style={{ color: "rgba(255,255,255,0.6)" }} />
+                              </button>
+                            </div>
+                          )}
+
+                          {isSwipingThis && swipeOffset > 20 && (
+                            <div style={{ position: "absolute", left: -36, bottom: 10, opacity: Math.min(swipeOffset / 60, 1) }}>
+                              <div style={{ width: 28, height: 28, borderRadius: "50%", background: "rgba(26,111,255,0.25)", border: "1px solid rgba(26,111,255,0.4)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                                <CornerUpLeft size={13} style={{ color: "#60a5fa" }} />
+                              </div>
+                            </div>
+                          )}
+
+                          {msg.reply_to_content && (
+                            <div style={{ background: isSent ? "rgba(0,0,0,0.2)" : "rgba(255,255,255,0.07)", borderLeft: "3px solid #60a5fa", borderRadius: "8px 8px 0 0", padding: "6px 10px", marginBottom: -4 }}>
+                              <div style={{ fontSize: 11, color: "#60a5fa", fontWeight: 600, marginBottom: 2 }}>{msg.reply_to_sender}</div>
+                              <div style={{ fontSize: 12, color: "rgba(255,255,255,0.6)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 200 }}>{msg.reply_to_content}</div>
+                            </div>
+                          )}
+
+                          <div style={{ padding: msg.file_url ? "6px" : "10px 14px", borderRadius: msg.reply_to_content ? (isSent ? "0 18px 4px 18px" : "0 18px 18px 4px") : (isSent ? "18px 18px 4px 18px" : "18px 18px 18px 4px"), background: isSent ? "linear-gradient(135deg, #1a6fff, #0d4fd9)" : "rgba(20,26,44,1)", border: isSent ? "none" : "1px solid rgba(255,255,255,0.09)", color: "#fff", fontSize: 14, lineHeight: 1.55, wordBreak: "break-word" }}>
+                            {msg.file_url ? renderFileMessage(msg) : (
+                              chatSearchQuery.trim()
+                                ? <HighlightText text={msg.content} query={chatSearchQuery} />
+                                : msg.content
+                            )}
+                          </div>
+
+                          <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 3, justifyContent: isSent ? "flex-end" : "flex-start" }}>
+                            <span style={{ fontSize: 11, color: "rgba(255,255,255,0.35)" }}>{time}</span>
+                            {isSent && (msg.is_read ? <CheckCheck size={12} style={{ color: "#60a5fa" }} /> : (msg.is_delivered || onlineUsers.has(activeChat?.userId || "")) ? <CheckCheck size={12} style={{ color: "rgba(255,255,255,0.4)" }} /> : <Check size={12} style={{ color: "rgba(255,255,255,0.4)" }} />)}
+                          </div>
+
+                          {hasReactions && (
+                            <div style={{ position: "absolute", bottom: -22, [isSent ? "right" : "left"]: 0, display: "flex", gap: 3, flexWrap: "wrap" }}>
+                              {Object.entries(msg.reactions!).map(([emoji, userIds]) => (
+                                <div key={emoji} onClick={() => toggleReaction(msg.id, emoji)} style={{ padding: "2px 7px", background: userIds.includes(user.id) ? "rgba(26,111,255,0.35)" : "rgba(20,26,44,0.98)", border: userIds.includes(user.id) ? "1px solid rgba(26,111,255,0.5)" : "1px solid rgba(255,255,255,0.15)", borderRadius: 999, fontSize: 12, cursor: "pointer", display: "flex", alignItems: "center", gap: 3, boxShadow: "0 2px 8px rgba(0,0,0,0.4)" }}>
+                                  {emoji}<span style={{ fontSize: 10, color: "rgba(255,255,255,0.7)" }}>{userIds.length}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          {reactionPickerMsgId === msg.id && (
+                            <div onClick={e => e.stopPropagation()} style={{ position: "absolute", [isSent ? "right" : "left"]: 0, bottom: "calc(100% + 10px)", background: "#1a2236", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 30, padding: "6px 12px", display: "flex", gap: 4, zIndex: 50, boxShadow: "0 4px 24px rgba(0,0,0,0.5)" }}>
+                              {REACTION_EMOJIS.map(e => (
+                                <button key={e} onClick={() => toggleReaction(msg.id, e)} style={{ fontSize: 22, background: "none", border: "none", cursor: "pointer", padding: "2px 3px", borderRadius: "50%", transition: "transform 0.1s" }} onMouseEnter={el => (el.currentTarget.style.transform = "scale(1.3)")} onMouseLeave={el => (el.currentTarget.style.transform = "scale(1)")}>{e}</button>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       </div>
-                    )}
-
-                    {displayedMessages.map((msg) => {
-                      const isSent = msg.sender_id === user?.id;
-                      const time = new Date(msg.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-                      const isSwipingThis = swipingMsgId === msg.id;
-                      const hasReactions = msg.reactions && Object.keys(msg.reactions).length > 0;
-                      const showActions = hoveredMsgId === msg.id && !msg.id.startsWith("optimistic-");
-
-                      return (
-                        <div key={msg.id} className="msg-in" style={{ marginBottom: hasReactions ? 24 : 2 }}
-                          onMouseEnter={() => setHoveredMsgId(msg.id)}
-                          onMouseLeave={() => setHoveredMsgId(null)}>
-                          <div style={{ display: "flex", justifyContent: isSent ? "flex-end" : "flex-start" }}>
-                            <div onTouchStart={e => handleTouchStart(e, msg)} onTouchMove={handleTouchMove} onTouchEnd={handleTouchEnd}
-                              style={{ maxWidth: "75%", transform: isSwipingThis ? `translateX(${Math.min(swipeOffset, 80)}px)` : "translateX(0)", transition: isSwipingThis ? "none" : "transform 0.2s ease", position: "relative" }}>
-
-                              {!msg.id.startsWith("optimistic-") && (
-                                <div className="msg-actions" style={{ position: "absolute", [isSent ? "right" : "left"]: "calc(100% + 6px)", bottom: 18, display: "flex", flexDirection: "column", gap: 4, zIndex: 10, opacity: showActions ? 1 : 0, pointerEvents: showActions ? "auto" : "none", transition: "opacity 0.15s" }}>
-                                  <button onClick={e => { e.stopPropagation(); setReactionPickerMsgId(prev => prev === msg.id ? null : msg.id); }} style={{ width: 28, height: 28, borderRadius: "50%", background: "rgba(255,255,255,0.1)", border: "none", cursor: "pointer", fontSize: 15, display: "flex", alignItems: "center", justifyContent: "center" }}>😊</button>
-                                  <button onClick={() => { setReplyTo(msg); inputRef.current?.focus(); }} style={{ width: 28, height: 28, borderRadius: "50%", background: "rgba(255,255,255,0.1)", border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                                    <CornerUpLeft size={13} style={{ color: "rgba(255,255,255,0.6)" }} />
-                                  </button>
-                                </div>
-                              )}
-
-                              {isSwipingThis && swipeOffset > 20 && (
-                                <div style={{ position: "absolute", left: -36, bottom: 10, opacity: Math.min(swipeOffset / 60, 1) }}>
-                                  <div style={{ width: 28, height: 28, borderRadius: "50%", background: "rgba(26,111,255,0.25)", border: "1px solid rgba(26,111,255,0.4)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                                    <CornerUpLeft size={13} style={{ color: "#60a5fa" }} />
-                                  </div>
-                                </div>
-                              )}
-
-                              {msg.reply_to_content && (
-                                <div style={{ background: isSent ? "rgba(0,0,0,0.2)" : "rgba(255,255,255,0.07)", borderLeft: "3px solid #60a5fa", borderRadius: "8px 8px 0 0", padding: "6px 10px", marginBottom: -4 }}>
-                                  <div style={{ fontSize: 11, color: "#60a5fa", fontWeight: 600, marginBottom: 2 }}>{msg.reply_to_sender}</div>
-                                  <div style={{ fontSize: 12, color: "rgba(255,255,255,0.6)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 200 }}>{msg.reply_to_content}</div>
-                                </div>
-                              )}
-
-                              <div style={{ padding: msg.file_url ? "6px" : "10px 14px", borderRadius: msg.reply_to_content ? (isSent ? "0 18px 4px 18px" : "0 18px 18px 4px") : (isSent ? "18px 18px 4px 18px" : "18px 18px 18px 4px"), background: isSent ? "linear-gradient(135deg, #1a6fff, #0d4fd9)" : "rgba(20,26,44,1)", border: isSent ? "none" : "1px solid rgba(255,255,255,0.09)", color: "#fff", fontSize: 14, lineHeight: 1.55, wordBreak: "break-word" }}>
-                                {msg.file_url ? renderFileMessage(msg) : msg.content}
-                              </div>
-
-                              <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 3, justifyContent: isSent ? "flex-end" : "flex-start" }}>
-                                <span style={{ fontSize: 11, color: "rgba(255,255,255,0.35)" }}>{time}</span>
-                                {isSent && (msg.is_read ? <CheckCheck size={12} style={{ color: "#60a5fa" }} /> : (msg.is_delivered || onlineUsers.has(activeChat?.userId || "")) ? <CheckCheck size={12} style={{ color: "rgba(255,255,255,0.4)" }} /> : <Check size={12} style={{ color: "rgba(255,255,255,0.4)" }} />)}
-                              </div>
-
-                              {hasReactions && (
-                                <div style={{ position: "absolute", bottom: -22, [isSent ? "right" : "left"]: 0, display: "flex", gap: 3, flexWrap: "wrap" }}>
-                                  {Object.entries(msg.reactions!).map(([emoji, userIds]) => (
-                                    <div key={emoji} onClick={() => toggleReaction(msg.id, emoji)} style={{ padding: "2px 7px", background: userIds.includes(user.id) ? "rgba(26,111,255,0.35)" : "rgba(20,26,44,0.98)", border: userIds.includes(user.id) ? "1px solid rgba(26,111,255,0.5)" : "1px solid rgba(255,255,255,0.15)", borderRadius: 999, fontSize: 12, cursor: "pointer", display: "flex", alignItems: "center", gap: 3, boxShadow: "0 2px 8px rgba(0,0,0,0.4)" }}>
-                                      {emoji}<span style={{ fontSize: 10, color: "rgba(255,255,255,0.7)" }}>{userIds.length}</span>
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
-
-                              {reactionPickerMsgId === msg.id && (
-                                <div onClick={e => e.stopPropagation()} style={{ position: "absolute", [isSent ? "right" : "left"]: 0, bottom: "calc(100% + 10px)", background: "#1a2236", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 30, padding: "6px 12px", display: "flex", gap: 4, zIndex: 50, boxShadow: "0 4px 24px rgba(0,0,0,0.5)" }}>
-                                  {REACTION_EMOJIS.map(e => (
-                                    <button key={e} onClick={() => toggleReaction(msg.id, e)} style={{ fontSize: 22, background: "none", border: "none", cursor: "pointer", padding: "2px 3px", borderRadius: "50%", transition: "transform 0.1s" }} onMouseEnter={el => (el.currentTarget.style.transform = "scale(1.3)")} onMouseLeave={el => (el.currentTarget.style.transform = "scale(1)")}>{e}</button>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                    <div ref={messagesEndRef} />
-                  </>
-                )}
+                    </div>
+                  );
+                })}
+                <div ref={messagesEndRef} />
               </div>
 
               {/* Reply Preview */}
@@ -1041,38 +1070,32 @@ export default function JugalbandiApp() {
                 </div>
               )}
 
-              {/* Input — disabled if blocked */}
+              {/* Input */}
               <div style={{ padding: "10px 12px", borderTop: "1px solid rgba(255,255,255,0.07)", background: "#0f1525", flexShrink: 0 }}>
-                {activeChat.userId && blockedUsers.has(activeChat.userId) ? (
-                  <div style={{ textAlign: "center", padding: "10px", color: "rgba(255,255,255,0.3)", fontSize: 13 }}>You can't send messages to a blocked user</div>
-                ) : (
-                  <>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 14, padding: "7px 10px" }}>
-                      <button onClick={e => { e.stopPropagation(); setShowEmojiPicker(p => !p); setReactionPickerMsgId(null); }} style={{ background: "none", border: "none", cursor: "pointer", flexShrink: 0, display: "flex", alignItems: "center", padding: 0 }}>
-                        <Smile size={20} style={{ color: showEmojiPicker ? "#60a5fa" : "rgba(255,255,255,0.4)" }} />
-                      </button>
-                      <input ref={inputRef} value={message} onChange={e => {
-                        setMessage(e.target.value);
-                        if (!user || !activeChat?.userId) return;
-                        supabase.channel("typing-room").send({ type: "broadcast", event: "typing", payload: { user_id: user.id, chat_id: activeChat.userId } });
-                      }}
-                        onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
-                        placeholder={activeChat.saved ? "Write a note to yourself..." : `Message ${activeChat.name}...`}
-                        style={{ flex: 1, background: "transparent", border: "none", color: "#fff", fontSize: 14, padding: "3px 0", minWidth: 0 }} />
-                      <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
-                        <input ref={fileInputRef} type="file" accept="*/*" onChange={handleFileSelect} style={{ display: "none" }} />
-                        <Paperclip size={18} style={{ color: uploading ? "#60a5fa" : "rgba(255,255,255,0.4)", cursor: "pointer" }} onClick={() => fileInputRef.current?.click()} />
-                        {message.trim()
-                          ? <div onClick={sendMessage} style={{ width: 36, height: 36, borderRadius: 11, background: sending ? "rgba(26,111,255,0.5)" : "linear-gradient(135deg, #1a6fff, #0d4fd9)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}><Send size={16} style={{ color: "#fff" }} /></div>
-                          : <div style={{ width: 36, height: 36, borderRadius: 11, background: "rgba(26,111,255,0.15)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}><Mic size={16} style={{ color: "#60a5fa" }} /></div>}
-                      </div>
-                    </div>
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 5, marginTop: 6 }}>
-                      <Shield size={11} style={{ color: "rgba(255,255,255,0.2)" }} />
-                      <span style={{ fontSize: 11, color: "rgba(255,255,255,0.2)" }}>End-to-end encrypted · Max 50MB</span>
-                    </div>
-                  </>
-                )}
+                <div style={{ display: "flex", alignItems: "center", gap: 8, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 14, padding: "7px 10px" }}>
+                  <button onClick={e => { e.stopPropagation(); setShowEmojiPicker(p => !p); setReactionPickerMsgId(null); }} style={{ background: "none", border: "none", cursor: "pointer", flexShrink: 0, display: "flex", alignItems: "center", padding: 0 }}>
+                    <Smile size={20} style={{ color: showEmojiPicker ? "#60a5fa" : "rgba(255,255,255,0.4)" }} />
+                  </button>
+                  <input ref={inputRef} value={message} onChange={e => {
+                    setMessage(e.target.value);
+                    if (!user || !activeChat?.userId) return;
+                    supabase.channel("typing-room").send({ type: "broadcast", event: "typing", payload: { user_id: user.id, chat_id: activeChat.userId } });
+                  }}
+                    onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
+                    placeholder={activeChat.saved ? "Write a note to yourself..." : `Message ${activeChat.name}...`}
+                    style={{ flex: 1, background: "transparent", border: "none", color: "#fff", fontSize: 14, padding: "3px 0", minWidth: 0 }} />
+                  <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
+                    <input ref={fileInputRef} type="file" accept="*/*" onChange={handleFileSelect} style={{ display: "none" }} />
+                    <Paperclip size={18} style={{ color: uploading ? "#60a5fa" : "rgba(255,255,255,0.4)", cursor: "pointer" }} onClick={() => fileInputRef.current?.click()} />
+                    {message.trim()
+                      ? <div onClick={sendMessage} style={{ width: 36, height: 36, borderRadius: 11, background: sending ? "rgba(26,111,255,0.5)" : "linear-gradient(135deg, #1a6fff, #0d4fd9)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}><Send size={16} style={{ color: "#fff" }} /></div>
+                      : <div style={{ width: 36, height: 36, borderRadius: 11, background: "rgba(26,111,255,0.15)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}><Mic size={16} style={{ color: "#60a5fa" }} /></div>}
+                  </div>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 5, marginTop: 6 }}>
+                  <Shield size={11} style={{ color: "rgba(255,255,255,0.2)" }} />
+                  <span style={{ fontSize: 11, color: "rgba(255,255,255,0.2)" }}>End-to-end encrypted · Max 50MB</span>
+                </div>
               </div>
             </>
           ) : (
