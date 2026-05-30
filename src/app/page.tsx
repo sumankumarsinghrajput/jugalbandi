@@ -589,10 +589,10 @@ export default function JugalbandiApp() {
         {/* Mobile Long Press Reaction Picker */}
         {mobileLongPressReaction && (
           <div onClick={() => setMobileLongPressReaction(null)} style={{ position: "fixed", inset: 0, zIndex: 500, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.4)" }}>
-            <div onClick={e => e.stopPropagation()} style={{ background: "#1a2236", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 40, padding: "10px 16px", display: "flex", gap: 6, boxShadow: "0 8px 40px rgba(0,0,0,0.6)" }}>
+            <div onClick={e => e.stopPropagation()} style={{ background: "#1a2236", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 40, padding: "8px 12px", display: "flex", gap: 2, boxShadow: "0 8px 40px rgba(0,0,0,0.6)" }}>
               {REACTION_EMOJIS.map(e => (
                 <button key={e} onClick={() => { toggleReaction(mobileLongPressReaction, e); setMobileLongPressReaction(null); }}
-                  style={{ fontSize: 28, background: "none", border: "none", cursor: "pointer", padding: "4px 2px", lineHeight: 1 }}>
+                  style={{ fontSize: 22, background: "none", border: "none", cursor: "pointer", padding: "4px", lineHeight: 1 }}>
                   {e}
                 </button>
               ))}
@@ -803,29 +803,12 @@ export default function JugalbandiApp() {
                   const hasReactions = msg.reactions && Object.keys(msg.reactions).length > 0;
                   const showActions = hoveredMsgId === msg.id && !msg.id.startsWith("optimistic-");
 
-                  // Desktop action bar — shows on hover between bubble and edge
-                  const ActionBar = (
-                    <div className="msg-actions" style={{ display: showActions ? "flex" : "none", flexDirection: "column", gap: 4, flexShrink: 0, alignSelf: "flex-end", marginBottom: 18 }}>
-                      <button onClick={e => { e.stopPropagation(); setReactionPickerMsgId(prev => prev === msg.id ? null : msg.id); }}
-                        style={{ width: 28, height: 28, borderRadius: "50%", background: "rgba(255,255,255,0.1)", border: "none", cursor: "pointer", fontSize: 15, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                        😊
-                      </button>
-                      <button onClick={() => { setReplyTo(msg); inputRef.current?.focus(); }}
-                        style={{ width: 28, height: 28, borderRadius: "50%", background: "rgba(255,255,255,0.1)", border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                        <CornerUpLeft size={13} style={{ color: "rgba(255,255,255,0.6)" }} />
-                      </button>
-                    </div>
-                  );
-
                   return (
                     <div key={msg.id} className="msg-in" style={{ marginBottom: hasReactions ? 24 : 2 }}
                       onMouseEnter={() => setHoveredMsgId(msg.id)}
                       onMouseLeave={() => setHoveredMsgId(null)}>
 
-                      <div style={{ display: "flex", justifyContent: isSent ? "flex-end" : "flex-start", alignItems: "flex-end", gap: 6 }}>
-
-                        {/* Sent message: action bar appears to the LEFT of bubble */}
-                        {isSent && ActionBar}
+                      <div style={{ display: "flex", justifyContent: isSent ? "flex-end" : "flex-start" }}>
 
                         {/* Message bubble */}
                         <div
@@ -833,6 +816,20 @@ export default function JugalbandiApp() {
                           onTouchMove={handleTouchMove}
                           onTouchEnd={handleTouchEnd}
                           style={{ maxWidth: "75%", transform: isSwipingThis ? `translateX(${Math.min(swipeOffset, 80)}px)` : "translateX(0)", transition: isSwipingThis ? "none" : "transform 0.2s ease", position: "relative" }}>
+
+                          {/* Desktop action bar — always in DOM, opacity controlled (no layout shift) */}
+                          {!msg.id.startsWith("optimistic-") && (
+                            <div className="msg-actions" style={{ position: "absolute", [isSent ? "right" : "left"]: "calc(100% + 6px)", bottom: 18, display: "flex", flexDirection: "column", gap: 4, zIndex: 10, opacity: showActions ? 1 : 0, pointerEvents: showActions ? "auto" : "none", transition: "opacity 0.15s" }}>
+                              <button onClick={e => { e.stopPropagation(); setReactionPickerMsgId(prev => prev === msg.id ? null : msg.id); }}
+                                style={{ width: 28, height: 28, borderRadius: "50%", background: "rgba(255,255,255,0.1)", border: "none", cursor: "pointer", fontSize: 15, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                                😊
+                              </button>
+                              <button onClick={() => { setReplyTo(msg); inputRef.current?.focus(); }}
+                                style={{ width: 28, height: 28, borderRadius: "50%", background: "rgba(255,255,255,0.1)", border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                                <CornerUpLeft size={13} style={{ color: "rgba(255,255,255,0.6)" }} />
+                              </button>
+                            </div>
+                          )}
 
                           {/* Swipe arrow — appears to the left as bubble slides right (same for all messages) */}
                           {isSwipingThis && swipeOffset > 20 && (
@@ -889,9 +886,6 @@ export default function JugalbandiApp() {
                             </div>
                           )}
                         </div>
-
-                        {/* Received message: action bar appears to the RIGHT of bubble */}
-                        {!isSent && ActionBar}
                       </div>
                     </div>
                   );
