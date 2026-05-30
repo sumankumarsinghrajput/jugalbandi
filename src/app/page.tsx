@@ -156,6 +156,7 @@ export default function JugalbandiApp() {
   const [hoveredMsgId, setHoveredMsgId] = useState<string | null>(null);
   const [swipingMsgId, setSwipingMsgId] = useState<string | null>(null);
   const [swipeOffset, setSwipeOffset] = useState(0);
+  const [mobileLongPressReaction, setMobileLongPressReaction] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -325,14 +326,27 @@ export default function JugalbandiApp() {
     return () => clearTimeout(t);
   }, [userSearch, user]);
 
-  // Swipe to reply (mobile)
+  // Touch handlers — swipe for reply, long press for reactions (mobile)
   function handleTouchStart(e: React.TouchEvent, msg: Message) {
     touchStartX.current = e.touches[0].clientX;
     touchStartY.current = e.touches[0].clientY;
     touchMsgRef.current = msg;
+    // Long press timer for reaction picker
+    if (longPressTimer.current) clearTimeout(longPressTimer.current);
+    longPressTimer.current = setTimeout(() => {
+      if (touchMsgRef.current && !msg.id.startsWith("optimistic-")) {
+        setMobileLongPressReaction(msg.id);
+        if (navigator.vibrate) navigator.vibrate(50);
+        touchMsgRef.current = null;
+        setSwipingMsgId(null);
+        setSwipeOffset(0);
+      }
+    }, 500);
   }
 
   function handleTouchMove(e: React.TouchEvent) {
+    // Cancel long press if user moves finger
+    if (longPressTimer.current) { clearTimeout(longPressTimer.current); longPressTimer.current = null; }
     if (!touchMsgRef.current) return;
     const dx = e.touches[0].clientX - touchStartX.current;
     const dy = Math.abs(e.touches[0].clientY - touchStartY.current);
@@ -344,6 +358,7 @@ export default function JugalbandiApp() {
   }
 
   function handleTouchEnd() {
+    if (longPressTimer.current) { clearTimeout(longPressTimer.current); longPressTimer.current = null; }
     if (swipeOffset > 60 && touchMsgRef.current) {
       setReplyTo(touchMsgRef.current);
       if (navigator.vibrate) navigator.vibrate(30);
@@ -544,9 +559,7 @@ export default function JugalbandiApp() {
         .chat-item.active { background: rgba(26,111,255,0.12); border-left-color: #1a6fff; }
         @keyframes fadeUp { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
         .msg-in { animation: fadeUp 0.2s ease forwards; }
-        .msg-wrap { position: relative; }
-        .msg-wrap:hover .reply-btn { opacity: 1; }
-        .reply-btn { opacity: 0; transition: opacity 0.15s; }
+        .msg-actions { display: flex; }
         .search-overlay { position: absolute; inset: 0; z-index: 50; background: #0f1525; display: flex; flex-direction: column; }
         .emoji-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 2px; }
         @media (max-width: 768px) {
@@ -556,11 +569,11 @@ export default function JugalbandiApp() {
           .chat-area:not(.slide-out) { transform: translateX(0); z-index: 11; }
           .chat-area.slide-out { transform: translateX(100%); }
           .emoji-grid { grid-template-columns: repeat(6, 1fr); }
-          .reply-btn { opacity: 1 !important; }
+          .msg-actions { display: none !important; }
         }
       `}</style>
 
-      <div className="app" onClick={() => { setAvatarPopup(null); setShowMenu(false); setReactionPickerMsgId(null); setShowEmojiPicker(false); }}>
+      <div className="app" onClick={() => { setAvatarPopup(null); setShowMenu(false); setReactionPickerMsgId(null); setShowEmojiPicker(false); setMobileLongPressReaction(null); }}>
 
         {/* Lightbox */}
         {lightboxImg && (
@@ -570,6 +583,20 @@ export default function JugalbandiApp() {
             <button onClick={() => downloadFile(lightboxImg!, lightboxImg!.split("/").pop() || "image")} style={{ position: "absolute", bottom: 20, left: "50%", transform: "translateX(-50%)", padding: "8px 20px", background: "rgba(26,111,255,0.8)", borderRadius: 10, color: "#fff", fontSize: 13, border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
               <Download size={14} /> Download
             </button>
+          </div>
+        )}
+
+        {/* Mobile Long Press Reaction Picker */}
+        {mobileLongPressReaction && (
+          <div onClick={() => setMobileLongPressReaction(null)} style={{ position: "fixed", inset: 0, zIndex: 500, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.4)" }}>
+            <div onClick={e => e.stopPropagation()} style={{ background: "#1a2236", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 40, padding: "10px 16px", display: "flex", gap: 6, boxShadow: "0 8px 40px rgba(0,0,0,0.6)" }}>
+              {REACTION_EMOJIS.map(e => (
+                <button key={e} onClick={() => { toggleReaction(mobileLongPressReaction, e); setMobileLongPressReaction(null); }}
+                  style={{ fontSize: 28, background: "none", border: "none", cursor: "pointer", padding: "4px 2px", lineHeight: 1 }}>
+                  {e}
+                </button>
+              ))}
+            </div>
           </div>
         )}
 
@@ -774,32 +801,45 @@ export default function JugalbandiApp() {
                   const time = new Date(msg.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
                   const isSwipingThis = swipingMsgId === msg.id;
                   const hasReactions = msg.reactions && Object.keys(msg.reactions).length > 0;
+                  const showActions = hoveredMsgId === msg.id && !msg.id.startsWith("optimistic-");
+
+                  // Desktop action bar — shows on hover between bubble and edge
+                  const ActionBar = (
+                    <div className="msg-actions" style={{ display: showActions ? "flex" : "none", flexDirection: "column", gap: 4, flexShrink: 0, alignSelf: "flex-end", marginBottom: 18 }}>
+                      <button onClick={e => { e.stopPropagation(); setReactionPickerMsgId(prev => prev === msg.id ? null : msg.id); }}
+                        style={{ width: 28, height: 28, borderRadius: "50%", background: "rgba(255,255,255,0.1)", border: "none", cursor: "pointer", fontSize: 15, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                        😊
+                      </button>
+                      <button onClick={() => { setReplyTo(msg); inputRef.current?.focus(); }}
+                        style={{ width: 28, height: 28, borderRadius: "50%", background: "rgba(255,255,255,0.1)", border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                        <CornerUpLeft size={13} style={{ color: "rgba(255,255,255,0.6)" }} />
+                      </button>
+                    </div>
+                  );
 
                   return (
-                    <div key={msg.id} className="msg-in msg-wrap" style={{ marginBottom: hasReactions ? 20 : 2 }}
+                    <div key={msg.id} className="msg-in" style={{ marginBottom: hasReactions ? 24 : 2 }}
                       onMouseEnter={() => setHoveredMsgId(msg.id)}
-                      onMouseLeave={() => { setHoveredMsgId(null); }}
-                    >
-                      <div style={{ display: "flex", justifyContent: isSent ? "flex-end" : "flex-start", alignItems: "center", gap: 6, position: "relative" }}>
+                      onMouseLeave={() => setHoveredMsgId(null)}>
 
-                        {/* Reply button — left side for received, right for sent (desktop hover + always mobile) */}
-                        {!isSent && (
-                          <button className="reply-btn" onClick={() => { setReplyTo(msg); inputRef.current?.focus(); }}
-                            style={{ width: 28, height: 28, borderRadius: "50%", background: "rgba(255,255,255,0.08)", border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                            <CornerUpLeft size={13} style={{ color: "rgba(255,255,255,0.5)" }} />
-                          </button>
-                        )}
+                      <div style={{ display: "flex", justifyContent: isSent ? "flex-end" : "flex-start", alignItems: "flex-end", gap: 6 }}>
 
-                        {/* Message bubble with swipe */}
+                        {/* Sent message: action bar appears to the LEFT of bubble */}
+                        {isSent && ActionBar}
+
+                        {/* Message bubble */}
                         <div
                           onTouchStart={e => handleTouchStart(e, msg)}
                           onTouchMove={handleTouchMove}
                           onTouchEnd={handleTouchEnd}
                           style={{ maxWidth: "75%", transform: isSwipingThis ? `translateX(${Math.min(swipeOffset, 80)}px)` : "translateX(0)", transition: isSwipingThis ? "none" : "transform 0.2s ease", position: "relative" }}>
-                          {/* Swipe reply arrow */}
+
+                          {/* Swipe arrow — appears to the left as bubble slides right (same for all messages) */}
                           {isSwipingThis && swipeOffset > 20 && (
-                            <div style={{ position: "absolute", left: -36, top: "50%", transform: "translateY(-50%)", opacity: Math.min(swipeOffset / 60, 1) }}>
-                              <CornerUpLeft size={18} style={{ color: "#60a5fa" }} />
+                            <div style={{ position: "absolute", left: -36, bottom: 10, opacity: Math.min(swipeOffset / 60, 1) }}>
+                              <div style={{ width: 28, height: 28, borderRadius: "50%", background: "rgba(26,111,255,0.25)", border: "1px solid rgba(26,111,255,0.4)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                                <CornerUpLeft size={13} style={{ color: "#60a5fa" }} />
+                              </div>
                             </div>
                           )}
 
@@ -811,6 +851,7 @@ export default function JugalbandiApp() {
                             </div>
                           )}
 
+                          {/* Bubble content */}
                           <div style={{ padding: msg.file_url ? "6px" : "10px 14px", borderRadius: msg.reply_to_content ? (isSent ? "0 18px 4px 18px" : "0 18px 18px 4px") : (isSent ? "18px 18px 4px 18px" : "18px 18px 18px 4px"), background: isSent ? "linear-gradient(135deg, #1a6fff, #0d4fd9)" : "rgba(20,26,44,1)", border: isSent ? "none" : "1px solid rgba(255,255,255,0.09)", color: "#fff", fontSize: 14, lineHeight: 1.55, wordBreak: "break-word" }}>
                             {msg.file_url ? renderFileMessage(msg) : msg.content}
                           </div>
@@ -821,22 +862,25 @@ export default function JugalbandiApp() {
                             {isSent && (msg.is_read ? <CheckCheck size={12} style={{ color: "#60a5fa" }} /> : (msg.is_delivered || onlineUsers.has(activeChat?.userId || "")) ? <CheckCheck size={12} style={{ color: "rgba(255,255,255,0.4)" }} /> : <Check size={12} style={{ color: "rgba(255,255,255,0.4)" }} />)}
                           </div>
 
-                          {/* Reactions display */}
+                          {/* Reactions display — below bubble */}
                           {hasReactions && (
-                            <div style={{ position: "absolute", bottom: -22, [isSent ? "right" : "left"]: 4, display: "flex", gap: 3, flexWrap: "wrap" }}>
+                            <div style={{ position: "absolute", bottom: -22, [isSent ? "right" : "left"]: 0, display: "flex", gap: 3, flexWrap: "wrap" }}>
                               {Object.entries(msg.reactions!).map(([emoji, userIds]) => (
-                                <div key={emoji} onClick={() => toggleReaction(msg.id, emoji)} style={{ padding: "2px 7px", background: userIds.includes(user.id) ? "rgba(26,111,255,0.35)" : "rgba(30,36,55,0.95)", border: userIds.includes(user.id) ? "1px solid rgba(26,111,255,0.5)" : "1px solid rgba(255,255,255,0.15)", borderRadius: 999, fontSize: 12, cursor: "pointer", display: "flex", alignItems: "center", gap: 3, boxShadow: "0 2px 8px rgba(0,0,0,0.3)" }}>
+                                <div key={emoji} onClick={() => toggleReaction(msg.id, emoji)}
+                                  style={{ padding: "2px 7px", background: userIds.includes(user.id) ? "rgba(26,111,255,0.35)" : "rgba(20,26,44,0.98)", border: userIds.includes(user.id) ? "1px solid rgba(26,111,255,0.5)" : "1px solid rgba(255,255,255,0.15)", borderRadius: 999, fontSize: 12, cursor: "pointer", display: "flex", alignItems: "center", gap: 3, boxShadow: "0 2px 8px rgba(0,0,0,0.4)" }}>
                                   {emoji}<span style={{ fontSize: 10, color: "rgba(255,255,255,0.7)" }}>{userIds.length}</span>
                                 </div>
                               ))}
                             </div>
                           )}
 
-                          {/* Reaction picker for this message */}
+                          {/* Reaction picker — desktop only, appears above bubble */}
                           {reactionPickerMsgId === msg.id && (
-                            <div onClick={e => e.stopPropagation()} style={{ position: "absolute", [isSent ? "right" : "left"]: 0, bottom: "calc(100% + 8px)", background: "#1a2236", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 30, padding: "6px 10px", display: "flex", gap: 4, zIndex: 50, boxShadow: "0 4px 20px rgba(0,0,0,0.4)" }}>
+                            <div onClick={e => e.stopPropagation()}
+                              style={{ position: "absolute", [isSent ? "right" : "left"]: 0, bottom: "calc(100% + 10px)", background: "#1a2236", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 30, padding: "6px 12px", display: "flex", gap: 4, zIndex: 50, boxShadow: "0 4px 24px rgba(0,0,0,0.5)" }}>
                               {REACTION_EMOJIS.map(e => (
-                                <button key={e} onClick={() => toggleReaction(msg.id, e)} style={{ fontSize: 20, background: "none", border: "none", cursor: "pointer", padding: "2px", borderRadius: "50%", transition: "transform 0.1s" }}
+                                <button key={e} onClick={() => toggleReaction(msg.id, e)}
+                                  style={{ fontSize: 22, background: "none", border: "none", cursor: "pointer", padding: "2px 3px", borderRadius: "50%", transition: "transform 0.1s" }}
                                   onMouseEnter={el => (el.currentTarget.style.transform = "scale(1.3)")}
                                   onMouseLeave={el => (el.currentTarget.style.transform = "scale(1)")}>
                                   {e}
@@ -846,23 +890,8 @@ export default function JugalbandiApp() {
                           )}
                         </div>
 
-                        {/* React + Reply button for sent messages (right side) */}
-                        {isSent && (
-                          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                            <button className="reply-btn" onClick={() => { setReplyTo(msg); inputRef.current?.focus(); }}
-                              style={{ width: 28, height: 28, borderRadius: "50%", background: "rgba(255,255,255,0.08)", border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                              <CornerUpLeft size={13} style={{ color: "rgba(255,255,255,0.5)" }} />
-                            </button>
-                          </div>
-                        )}
-
-                        {/* Emoji react button on hover (desktop) */}
-                        {hoveredMsgId === msg.id && !msg.id.startsWith("optimistic-") && (
-                          <button onClick={e => { e.stopPropagation(); setReactionPickerMsgId(prev => prev === msg.id ? null : msg.id); }}
-                            style={{ position: "absolute", [isSent ? "left" : "right"]: isSent ? -30 : -30, top: 0, width: 24, height: 24, borderRadius: "50%", background: "rgba(255,255,255,0.1)", border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14 }}>
-                            😊
-                          </button>
-                        )}
+                        {/* Received message: action bar appears to the RIGHT of bubble */}
+                        {!isSent && ActionBar}
                       </div>
                     </div>
                   );
